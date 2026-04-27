@@ -5,7 +5,7 @@ clear; clc; close all;
 
 % --- Parametry Systemu ---
 Nt = 64;                % Liczba anten na stacji bazowej (BS)
-K = 10;                 % Liczba legalnych użytkowników (Bobs)
+K = 50;                 % Liczba legalnych użytkowników (Bobs)
 rho_values = 0:0.1:0.9; % Wektor wartości korelacji do przebadania [cite: 13]
 num_monte_carlo = 100;  % Liczba pętli uśredniających (Monte Carlo)
 
@@ -45,11 +45,15 @@ for r_idx = 1:length(rho_values)
         % Używamy skorelowanego kanału H_corr!
         W_zf_unnorm = H_corr * inv(H_corr' * H_corr);
         
-        % 2. Normalizacja Macierzowa (Matrix Normalization)
-        % Zapewnia, że stacja bazowa nie wyemituje nieskończonej mocy
-        P_max = K; % Całkowita moc nadawania (np. równa liczbie użytkowników)
-        gamma = sqrt(P_max / trace(W_zf_unnorm * W_zf_unnorm'));
-        W_zf = gamma * W_zf_unnorm;
+        % ===============================================================
+        % 2. Normalizacja Wektorowa (Vector Normalization)
+        % Zapewnia, że każda antena/wiązka ma równy limit mocy nadawczej
+        % ===============================================================
+        W_zf = zeros(Nt, K);
+        for k = 1:K
+            % Dzielimy każdą kolumnę przez jej własną normę
+            W_zf(:,k) = W_zf_unnorm(:,k) / norm(W_zf_unnorm(:,k));
+        end
         
         % 3. Obliczenie mocy sygnału odebranego dla każdego Boba
         % Ponieważ to idealne ZF, interferencje wewnątrz komórki znikają (są bliskie 0)
@@ -105,3 +109,7 @@ ylim([0 1.1]); % Wskaźnik Jaina zawsze jest od 0 do 1 [cite: 28]
 title('Wpływ korelacji przestrzennej na system Massive MIMO PLS');
 grid on;
 legend('Secrecy Sum-Rate (ZF)', 'Jain''s Fairness (ZF)', 'Location', 'southwest');
+
+% --- Zapisywanie wyników ---
+% Zapisuje wykres udowadniający zapaść algorytmu ZF przy wysokiej korelacji
+saveas(gcf, '../results/wykres_korelacja_przestrzenna.png');
