@@ -1,107 +1,101 @@
-%% 6G PLS: Colluding Eavesdroppers vs Band Frequency (6GHz vs 28GHz)
+% =========================================================================
+% SCENARIO: 6 GHz vs 28 GHz under colluding eavesdroppers (worst-case MRC)
+% -------------------------------------------------------------------------
+% L geographically scattered eavesdroppers cooperate via a back-haul
+% link and apply Maximum-Ratio Combining (MRC) — the worst case for the
+% transmitter. The combined receive vector for stream k is
+%       g_eq(k) = sum_e g_e * (g_e^H w_k)^*       (matched to leakage)
+% which gives  SNR_eve_k = sum_e |g_e^H w_k|^2 / noise_var.
+% This is the canonical MRC bound used in PLS literature.
+%
+% We compare a sub-6 GHz Massive-MIMO array (Nt = 32) to a 28 GHz
+% Ultra-Massive-MIMO array (Nt = 512). The latter wins because much
+% narrower beams reduce per-Eve leakage despite the higher path loss.
+% =========================================================================
 clear; clc; close all;
+addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
+p = default_params();
+rng(p.rng_seed);
 
-% --- Parametry Konfiguracyjne (zgodnie z plikiem kolegi) ---
-dist = 30;                  % Dystans w metrach [cite: 2903]
-L_values = 1:2:15;          % Liczba współpracujących podsłuchiwaczy (L) [cite: 2881, 2883]
-K = 4;                      % Liczba legalnych użytkowników (Bobs)
-numIter = 50;               % Liczba powtórzeń Monte Carlo
-c = physconst('LightSpeed'); % Prędkość światła [cite: 2904]
+% --- Configuration -------------------------------------------------------
+dist        = 30;                  % link distance [m]
+L_values    = 1:2:15;              % # colluding Eves
+K           = 4;                   % legitimate users
+numIter     = 80;
+SNR_rx_dB   = 30;                  % desired received SNR after path loss
+noise_var   = p.noise_var;
 
-% Częstotliwości i anteny (Ultra-Massive MIMO)
-fc_6 = 6e9;   Nt_6 = 32;    % 6 GHz [cite: 2906]
-fc_mm = 28e9; Nt_mm = 512;  % 28 GHz [cite: 2950]
+bands = struct( ...
+    'name', {'6 GHz (Massive MIMO)', '28 GHz (Ultra-Massive MIMO)'}, ...
+    'fc',   {p.fc_sub6,              p.fc_mmwave}, ...
+    'Nt',   {p.Nt_sub6,              p.Nt_mmwave});
 
-% --- Obliczanie Tłumienia (FSPL) [cite: 2905] ---
-PL_6_lin = 10^((20*log10(dist) + 20*log10(fc_6) - 147.55)/10);
-PL_mm_lin = 10^((20*log10(dist) + 20*log10(fc_mm) - 147.55)/10);
+results_SR    = zeros(2, length(L_values));
+results_Fair  = zeros(2, length(L_values));
 
-% Inicjalizacja tablic na wyniki
-results_SR = zeros(2, length(L_values)); % [1: 6GHz, 2: 28GHz]
-results_Fairness = zeros(2, length(L_values));
-
-% --- Pętla Symulacji ---
-for f_idx = 1:2
-    if f_idx == 1
-        fc = fc_6; Nt = Nt_6; L_path = PL_6_lin;
-    else
-        fc = fc_mm; Nt = Nt_mm; L_path = PL_mm_lin;
-    end
-
-    % Definicja szyku antenowego 
-    ula = phased.ULA('NumElements', Nt, 'ElementSpacing', c/fc/2);
-    sv = phased.SteeringVector('SensorArray', ula);
+% --- Sweep ---------------------------------------------------------------
+for b = 1:2
+    fc = bands(b).fc;  Nt = bands(b).Nt;
+    PL_lin = compute_fspl(dist, fc);
+    P_tx   = 10^(SNR_rx_dB/10) * PL_lin;     % transmit power for SNR_rx_dB at user
+    [~, sv] = setup_ula(Nt, fc);
 
     for l_idx = 1:length(L_values)
         num_eve = L_values(l_idx);
-        temp_SR = zeros(numIter, 1);
-        temp_Fair = zeros(numIter, 1);
-
-        for iter = 1:numIter
-            % 1. Kanały Bobów (różne kąty)
+        SR_acc = 0; F_acc = 0;
+        for it = 1:numIter
             theta_bobs = -60 + 120*rand(1, K);
-            H = step(sv, fc, theta_bobs); % <--- USUNIĘTO TRANSPOZYCJĘ (')
-
-            % 2. Kanały Podsłuchiwaczy (rozsiani losowo)
             theta_eves = -90 + 180*rand(1, num_eve);
-            G = step(sv, fc, theta_eves); % <--- USUNIĘTO TRANSPOZYCJĘ (')
 
-            % 3. Precoding Zero-Forcing (ZF)
+            H = step(sv, fc, theta_bobs);   % Nt x K
+            G = step(sv, fc, theta_eves);   % Nt x num_eve
+
             W = H * pinv(H' * H);
-            W = W / norm(W, 'fro'); % Normalizacja macierzowa
+            W = W / norm(W, 'fro');         % Frobenius normalisation
+            P_eff = P_tx / PL_lin;          % received power scale per stream
 
-            % 4. Obliczanie SNR u Bobów (uwzględniając tłumienie)
-            SNR_transmit = 1000; % Przykładowa moc
-            P_eff = SNR_transmit / L_path; 
-            
-            R_bobs = zeros(K, 1);
+            R_b = zeros(K, 1);
+            R_e = zeros(K, 1);
             for k = 1:K
-                signal = P_eff * abs(H(:,k)' * W(:,k))^2;
-                R_bobs(k) = log2(1 + signal);
+                R_b(k) = log2(1 + P_eff * abs(H(:,k)' * W(:,k))^2 / noise_var);
+
+                % MRC bound: sum of leakage powers across all Eves
+                snr_eve_k = P_eff * sum(abs(G' * W(:,k)).^2);
+                R_e(k)    = log2(1 + snr_eve_k / noise_var);
             end
-            
-            % 5. Atak: Współpracujący Podsłuchiwacze (MRC) - INDYWIDUALNIE
-            R_eve = zeros(K, 1);
-            for k = 1:K
-                snr_eve_k = 0;
-                for e = 1:num_eve
-                    % Podsłuchiwacze (Eve) sumują siłę sygnału tylko z wiązki k-tego Boba
-                    leakage_k = P_eff * abs(G(:,e)' * W(:,k))^2;
-                    snr_eve_k = snr_eve_k + leakage_k;
-                end
-                R_eve(k) = log2(1 + snr_eve_k);
-            end
-            
-            % 6. Secrecy Rate i Sprawiedliwość Jaina
-            SR_vector = max(0, R_bobs - R_eve);
-            
-            temp_SR(iter) = sum(SR_vector);
-            
-            % Zabezpieczenie przed dzieleniem przez zero, gdy SR_vector to same zera
-            if sum(SR_vector) == 0
-                temp_Fair(iter) = 0;
-            else
-                temp_Fair(iter) = (sum(SR_vector)^2) / (K * sum(SR_vector.^2));
-            end
+
+            R_s = secrecy_rate(R_b, R_e);
+            SR_acc = SR_acc + sum(R_s);
+            F_acc  = F_acc  + jains_fairness(R_s);
         end
-        results_SR(f_idx, l_idx) = mean(temp_SR);
-        results_Fairness(f_idx, l_idx) = mean(temp_Fair, 'omitnan');
+        results_SR(b, l_idx)   = SR_acc / numIter;
+        results_Fair(b, l_idx) = F_acc  / numIter;
     end
 end
 
-% --- Profesjonalna Wizualizacja ---
-figure( 'Position', [100 100 1000 400]);
-subplot(1,2,1);
-plot(L_values, results_SR(1,:), '-bo', L_values, results_SR(2,:), '-rs', 'LineWidth', 2);
-grid on; xlabel('Liczba podsłuchiwaczy (L)'); ylabel('Secrecy Sum-Rate (bps/Hz)');
-legend('6 GHz (Massive MIMO)', '28 GHz (Ultra-Massive)', 'Location', 'SouthWest');
-title('Wydajność Bezpieczeństwa');
+% --- Visualisation -------------------------------------------------------
+fig = figure('Color', 'w', 'Position', [100 100 1100 420]);
 
-subplot(1,2,2);
-plot(L_values, results_Fairness(1,:), '--bo', L_values, results_Fairness(2,:), '--rs', 'LineWidth', 2);
-grid on; xlabel('Liczba podsłuchiwaczy (L)'); ylabel('Jain''s Fairness Index');
-title('Sprawiedliwość Ochrony');
+subplot(1, 2, 1);
+plot(L_values, results_SR(1,:), '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
+plot(L_values, results_SR(2,:), '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
+grid on; box on;
+xlabel('Number of colluding eavesdroppers (L)');
+ylabel('Secrecy Sum-Rate (bits/s/Hz)');
+title('Security under MRC attack');
+legend(bands(1).name, bands(2).name, 'Location', 'NorthEast');
 
-% --- Zapisywanie wyników ---
-% Zapisuje wykres pokazujący różnicę między 6GHz a 28GHz przy ataku grupy Eve
-saveas(gcf, '../results/wykres_6GHz_vs_28GHz.png');
+subplot(1, 2, 2);
+plot(L_values, results_Fair(1,:), '--bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
+plot(L_values, results_Fair(2,:), '--rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
+grid on; box on;
+ylim([0 1.05]);
+xlabel('Number of colluding eavesdroppers (L)');
+ylabel("Jain's fairness index");
+title('Fairness across legitimate users');
+legend(bands(1).name, bands(2).name, 'Location', 'SouthWest');
+
+sgtitle(sprintf('6 GHz vs 28 GHz under colluding Eves  (K = %d, d = %d m, SNR = %d dB)', ...
+    K, dist, SNR_rx_dB));
+
+save_figure(fig, 'fig_colluding_eavesdroppers');

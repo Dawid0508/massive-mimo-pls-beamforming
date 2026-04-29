@@ -1,115 +1,121 @@
 % =========================================================================
-% SYMULACJA 1: Wpływ korelacji przestrzennej na Secrecy Rate i Fairness
+% SCENARIO 1: Spatial correlation impact on Secrecy Rate and Fairness
+% -------------------------------------------------------------------------
+% Reference: PLS in Massive MIMO Challenges (ResearchGate 399962830);
+%            Scenariusze_pomysły.docx, Scenario 1.
+%
+% This script compares two ZF normalization strategies under increasing
+% spatial correlation rho in {0, 0.1, ..., 0.9}:
+%   * Matrix normalization  : W = ZF / ||ZF||_F  (joint power constraint)
+%   * Vector normalization  : each column of W normalised to unit norm
+%
+% A passive eavesdropper (Eve) observes the same downlink with an
+% independent Rayleigh channel. We report:
+%   * Secrecy Sum-Rate         (sum_k max(0, R_b(k) - R_e(k)))
+%   * Jain's fairness index    over per-user secrecy rates
 % =========================================================================
 clear; clc; close all;
+addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
+p = default_params();
+rng(p.rng_seed);
 
-% --- Parametry Systemu ---
-Nt = 64;                % Liczba anten na stacji bazowej (BS)
-K = 50;                 % Liczba legalnych użytkowników (Bobs)
-rho_values = 0:0.1:0.9; % Wektor wartości korelacji do przebadania [cite: 13]
-num_monte_carlo = 100;  % Liczba pętli uśredniających (Monte Carlo)
+% --- System parameters ---------------------------------------------------
+Nt          = 64;                  % BS antennas
+K           = 8;                   % legitimate users (Bobs)
+rho_values  = 0:0.1:0.9;           % spatial-correlation sweep
+numIter     = 200;                 % Monte-Carlo iterations
+SNR_dB      = 20;                  % transmit SNR
+P_tot       = 10^(SNR_dB/10);      % total transmit power (linear)
+noise_var   = p.noise_var;
 
-% Przygotowanie tablic na wyniki (wypełnione zerami dla optymalizacji)
-results_sum_rate_zf = zeros(length(rho_values), 1);
-results_jains_idx_zf = zeros(length(rho_values), 1);
+% Result storage:  rows = {Matrix, Vector} normalization
+SR_sum      = zeros(2, length(rho_values));
+fairness    = zeros(2, length(rho_values));
 
-% --- Główna Pętla Symulacji ---
+% --- Main sweep ----------------------------------------------------------
 for r_idx = 1:length(rho_values)
     rho = rho_values(r_idx);
 
-    % Zmienne tymczasowe dla metody Monte Carlo
-    temp_sum_rate = 0;
-    temp_jains = 0;
+    % Exponential correlation matrix (Toeplitz, rho^|i-j|)
+    R = toeplitz(rho.^(0:Nt-1));
+    R_sqrt = sqrtm(R);
 
-    for mc = 1:num_monte_carlo
-        % 1. Definicja macierzy korelacji R [cite: 11]
-        R = zeros(Nt, Nt);
-        for i = 1:Nt
-            for j = 1:Nt
-                R(i,j) = rho^(abs(i-j));
+    SR_sum_acc   = zeros(2, 1);
+    fairness_acc = zeros(2, 1);
+
+    for mc = 1:numIter
+        % --- Channels -------------------------------------------------
+        % Bob: correlated Rayleigh.   Eve: independent Rayleigh.
+        H_iid = (randn(Nt, K) + 1j*randn(Nt, K)) / sqrt(2);
+        H     = R_sqrt * H_iid;                                    % Nt x K
+
+        h_eve = (randn(Nt, 1) + 1j*randn(Nt, 1)) / sqrt(2);
+
+        % --- ZF precoder (regularised pseudo-inverse) ----------------
+        % W_raw = H * (H'*H)^(-1)  ;  pinv handles near-singular H'*H.
+        Gram   = H' * H;
+        W_raw  = H * pinv(Gram);
+
+        % (1) Matrix normalization  -> joint Frobenius constraint
+        W_mat = W_raw / norm(W_raw, 'fro') * sqrt(P_tot);
+
+        % (2) Vector normalization -> equal per-user power P_tot/K
+        W_vec = zeros(Nt, K);
+        for k = 1:K
+            col = W_raw(:, k);
+            if norm(col) > 1e-9
+                W_vec(:, k) = col / norm(col) * sqrt(P_tot / K);
             end
         end
 
-        % 2. Generowanie nieskorelowanych kanałów (idealny Rayleigh) [cite: 7]
-        H_uncorr = (randn(Nt, K) + 1i*randn(Nt, K)) / sqrt(2);
+        for n_idx = 1:2
+            if n_idx == 1, W = W_mat; else, W = W_vec; end
 
-        % 3. Nałożenie korelacji przestrzennej [cite: 12]
-        H_corr = sqrtm(R) * H_uncorr; 
+            R_b = zeros(K, 1);
+            R_e = zeros(K, 1);
+            for k = 1:K
+                % Bob k: his own signal + intra-cell interference
+                sig   = abs(H(:,k)' * W(:,k))^2;
+                intf  = sum(abs(H(:,k)' * W).^2) - sig;
+                R_b(k) = log2(1 + sig / (intf + noise_var));
 
-        % ===============================================================
-        % ===============================================================
-        % PRAWDZIWA MATEMATYKA PLS (Precoding Zero-Forcing)
-        % ===============================================================
-        
-        % 1. Obliczenie surowej macierzy ZF (Pseudoodwrotność Moore'a-Penrose'a)
-        % Używamy skorelowanego kanału H_corr!
-        W_zf_unnorm = H_corr * inv(H_corr' * H_corr);
-        
-        % ===============================================================
-        % 2. Normalizacja Wektorowa (Vector Normalization)
-        % Zapewnia, że każda antena/wiązka ma równy limit mocy nadawczej
-        % ===============================================================
-        W_zf = zeros(Nt, K);
-        for k = 1:K
-            % Dzielimy każdą kolumnę przez jej własną normę
-            W_zf(:,k) = W_zf_unnorm(:,k) / norm(W_zf_unnorm(:,k));
+                % Eve attempts to decode user k via her own channel
+                sig_e  = abs(h_eve' * W(:,k))^2;
+                intf_e = sum(abs(h_eve' * W).^2) - sig_e;
+                R_e(k) = log2(1 + sig_e / (intf_e + noise_var));
+            end
+
+            R_s = secrecy_rate(R_b, R_e);
+            SR_sum_acc(n_idx)   = SR_sum_acc(n_idx)   + sum(R_s);
+            fairness_acc(n_idx) = fairness_acc(n_idx) + jains_fairness(R_s);
         end
-        
-        % 3. Obliczenie mocy sygnału odebranego dla każdego Boba
-        % Ponieważ to idealne ZF, interferencje wewnątrz komórki znikają (są bliskie 0)
-        R_sec = zeros(K, 1);
-        noise_var = 1; % Wariancja szumu (AWGN)
-        
-        for k = 1:K
-            % Sygnał użyteczny dla k-tego użytkownika
-            signal_power = abs(H_corr(:,k)' * W_zf(:,k))^2;
-            
-            % Przepustowość Boba (z wzoru Shannona)
-            R_bob = log2(1 + (signal_power / noise_var));
-            
-            % UWAGA: Tutaj na razie zakładamy, że Eve (podsłuchiwacz) ma kanał = 0.
-            % W kolejnym kroku dodamy model Eve, żeby policzyć prawdziwy Secrecy Rate!
-            R_eve = 0; 
-            
-            % Wzór na Secrecy Rate: max(0, R_bob - R_eve)
-            R_sec(k) = max(0, R_bob - R_eve);
-        end
-        % ===============================================================
-
-
-        % 4. Obliczenia wynikowe
-        sum_rate = sum(R_sec);
-
-        % Wskaźnik Sprawiedliwości Jaina (Jain's Fairness Index) [cite: 27]
-        % Wzór: (Suma R)^2 / (K * Suma R^2) [cite: 28]
-        jains_index = (sum(R_sec)^2) / (K * sum(R_sec.^2)); 
-
-        % Dodawanie do średniej Monte Carlo
-        temp_sum_rate = temp_sum_rate + sum_rate;
-        temp_jains = temp_jains + jains_index;
     end
 
-    % Uśrednianie wyników dla danego rho i zapis do głównej tablicy
-    results_sum_rate_zf(r_idx) = temp_sum_rate / num_monte_carlo;
-    results_jains_idx_zf(r_idx) = temp_jains / num_monte_carlo;
+    SR_sum(:, r_idx)   = SR_sum_acc   / numIter;
+    fairness(:, r_idx) = fairness_acc / numIter;
 end
 
-% --- Rysowanie Wykresów ---
-figure;
-yyaxis left;
-plot(rho_values, results_sum_rate_zf, '-bo', 'LineWidth', 2);
-ylabel('Sumaryczny Secrecy Rate (bits/s/Hz)');
-xlabel('Współczynnik Korelacji Przestrzennej (\rho)');
+% --- Visualisation -------------------------------------------------------
+fig = figure('Color', 'w', 'Position', [100 100 1100 420]);
 
-yyaxis right;
-plot(rho_values, results_jains_idx_zf, '-r^', 'LineWidth', 2);
-ylabel('Wskaźnik Jaina (Jain''s Fairness Index)');
-ylim([0 1.1]); % Wskaźnik Jaina zawsze jest od 0 do 1 [cite: 28]
+subplot(1, 2, 1);
+plot(rho_values, SR_sum(1,:), '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
+plot(rho_values, SR_sum(2,:), '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
+grid on; box on;
+xlabel('Spatial correlation \rho'); ylabel('Secrecy Sum-Rate (bits/s/Hz)');
+title('Secrecy Sum-Rate vs \rho');
+legend('Matrix normalization', 'Vector normalization', 'Location', 'SouthWest');
 
-title('Wpływ korelacji przestrzennej na system Massive MIMO PLS');
-grid on;
-legend('Secrecy Sum-Rate (ZF)', 'Jain''s Fairness (ZF)', 'Location', 'southwest');
+subplot(1, 2, 2);
+plot(rho_values, fairness(1,:), '--bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
+plot(rho_values, fairness(2,:), '--rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
+grid on; box on;
+ylim([0 1.05]);
+xlabel('Spatial correlation \rho'); ylabel("Jain's fairness index");
+title("Fairness vs \rho");
+legend('Matrix normalization', 'Vector normalization', 'Location', 'SouthWest');
 
-% --- Zapisywanie wyników ---
-% Zapisuje wykres udowadniający zapaść algorytmu ZF przy wysokiej korelacji
-saveas(gcf, '../results/wykres_korelacja_przestrzenna.png');
+sgtitle(sprintf('Spatial correlation in Massive MIMO PLS  (Nt=%d, K=%d, SNR=%d dB)', ...
+    Nt, K, SNR_dB));
+
+save_figure(fig, 'fig_spatial_correlation');

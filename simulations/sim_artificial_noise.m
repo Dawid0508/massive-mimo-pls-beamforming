@@ -1,111 +1,137 @@
 % =========================================================================
-% SYMULACJA 3: Ochrona pasma 6 GHz za pomocą Sztucznego Szumu (Artificial Noise)
+% SCENARIO: Artificial Noise (AN) injection in the null space of H'
+% -------------------------------------------------------------------------
+% Goh & Hong (2011) showed that splitting BS power between data
+% (fraction phi) and isotropic noise in the null space of H' (fraction
+% 1-phi) leaks zero AN to the legitimate users while jamming any
+% off-subspace eavesdropper. We replicate the effect at 6 GHz under a
+% colluding multi-Eve attack and (a) sweep L = #Eves at fixed phi, (b)
+% sweep phi at fixed L to expose the data/noise trade-off optimum.
 % =========================================================================
 clear; clc; close all;
+addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
+p = default_params();
+rng(p.rng_seed);
 
-% --- Parametry Konfiguracyjne ---
-dist = 30;                  % Dystans w metrach
-L_values = 1:2:15;          % Liczba współpracujących podsłuchiwaczy (L)
-K = 4;                      % Liczba legalnych użytkowników (Bobs)
-numIter = 50;               % Pętle Monte Carlo
-c = physconst('LightSpeed'); 
+% --- Configuration -------------------------------------------------------
+dist        = 30;                     % Alice <-> users distance [m]
+L_values    = 1:2:15;                 % # colluding eavesdroppers (sweep A)
+phi_values  = 0.1:0.1:1.0;            % data-power fraction (sweep B)
+L_fixed     = 7;                      % # Eves used in sweep B
+phi_fixed   = 0.7;                    % phi used in sweep A
+K           = 4;                      % legitimate users
+numIter     = 80;
+noise_var   = p.noise_var;
 
-% Parametry tylko dla pasma 6 GHz (bo tu mieliśmy problem)
-fc = 6e9;   Nt = 32;    
-PL_lin = 10^((20*log10(dist) + 20*log10(fc) - 147.55)/10);
+fc = p.fc_sub6;  Nt = p.Nt_sub6;
+PL_lin = compute_fspl(dist, fc);
 
-% Alokacja Mocy
-SNR_received_dB = 30; 
-P_eff = 10^(SNR_received_dB/10); 
-phi = 0.7; % Ułamek mocy na DANE (70%), reszta (30%) idzie na SZUM (AN)
+% Operating point: 30 dB *received* SNR after path loss
+P_tx = 10^(30/10) * PL_lin;            % transmit power so that P_tx/PL = 30 dB
 
-% Inicjalizacja tablic
-results_SR_no_AN = zeros(1, length(L_values));
-results_SR_with_AN = zeros(1, length(L_values));
+[ula, sv] = setup_ula(Nt, fc); %#ok<ASGLU>
 
-% Definicja szyku antenowego
-ula = phased.ULA('NumElements', Nt, 'ElementSpacing', c/fc/2);
-sv = phased.SteeringVector('SensorArray', ula);
+% --- Sweep A: number of Eves at phi = phi_fixed -------------------------
+SR_no_AN_A   = zeros(1, length(L_values));
+SR_with_AN_A = zeros(1, length(L_values));
 
 for l_idx = 1:length(L_values)
     num_eve = L_values(l_idx);
-    temp_SR_no_AN = zeros(numIter, 1);
-    temp_SR_with_AN = zeros(numIter, 1);
-    
-    for iter = 1:numIter
-        % 1. Kanały
-        theta_bobs = -60 + 120*rand(1, K);
-        H = step(sv, fc, theta_bobs); % Bobowie
-        
-        theta_eves = -90 + 180*rand(1, num_eve);
-        G = step(sv, fc, theta_eves); % Podsłuchiwacze
-        
-        % 2. Precoding ZF dla Bobów
-        W = H * pinv(H' * H);
-        W = W / norm(W, 'fro'); 
-        
-        % 3. Generowanie Przestrzeni Zerowej (Null Space) dla Sztucznego Szumu
-        % Funkcja null() znajduje wektory, które po pomnożeniu przez H dają 0
-        Z = null(H'); 
-        num_null_dims = size(Z, 2); % Liczba wymiarów dla szumu
-        
-        % 4. Obliczanie SNR dla Bobów
-        R_bobs_no_AN = zeros(K, 1);
-        R_bobs_with_AN = zeros(K, 1);
-        
-        for k = 1:K
-            % Bez AN (100% mocy na dane)
-            sig_no_AN = P_eff * abs(H(:,k)' * W(:,k))^2;
-            R_bobs_no_AN(k) = log2(1 + sig_no_AN);
-            
-            % Z AN (70% mocy na dane, 30% na szum). Bob NIE SŁYSZY szumu!
-            sig_with_AN = (phi * P_eff) * abs(H(:,k)' * W(:,k))^2;
-            R_bobs_with_AN(k) = log2(1 + sig_with_AN);
-        end
-        
-        % 5. Atak Podsłuchiwaczy (MRC)
-        R_eve_no_AN = zeros(K, 1);
-        R_eve_with_AN = zeros(K, 1);
-        
-        for k = 1:K
-            snr_eve_no_AN = 0;
-            snr_eve_with_AN = 0;
-            
-            for e = 1:num_eve
-                % Wyciek samych danych (dla obu przypadków)
-                leakage_data_no_AN = P_eff * abs(G(:,e)' * W(:,k))^2;
-                leakage_data_with_AN = (phi * P_eff) * abs(G(:,e)' * W(:,k))^2;
-                
-                % EVE SŁYSZY SZUM! Uderza on w jej mianownik (zakłóca odbiór)
-                % Szum rozkłada się równo na wszystkie wymiary przestrzeni zerowej
-                interference_AN = ((1 - phi) * P_eff / num_null_dims) * norm(G(:,e)' * Z)^2;
-                
-                % MRC sumuje SINR z każdego podsłuchiwacza
-                snr_eve_no_AN = snr_eve_no_AN + leakage_data_no_AN;
-                snr_eve_with_AN = snr_eve_with_AN + (leakage_data_with_AN / (1 + interference_AN));
-            end
-            
-            R_eve_no_AN(k) = log2(1 + snr_eve_no_AN);
-            R_eve_with_AN(k) = log2(1 + snr_eve_with_AN);
-        end
-        
-        % 6. Secrecy Rate
-        temp_SR_no_AN(iter) = sum(max(0, R_bobs_no_AN - R_eve_no_AN));
-        temp_SR_with_AN(iter) = sum(max(0, R_bobs_with_AN - R_eve_with_AN));
+    acc_no = 0; acc_an = 0;
+    for it = 1:numIter
+        [SR_no, SR_an] = run_AN_trial(sv, fc, Nt, K, num_eve, ...
+                                      P_tx, PL_lin, phi_fixed, noise_var);
+        acc_no = acc_no + SR_no;
+        acc_an = acc_an + SR_an;
     end
-    results_SR_no_AN(l_idx) = mean(temp_SR_no_AN);
-    results_SR_with_AN(l_idx) = mean(temp_SR_with_AN);
+    SR_no_AN_A(l_idx)   = acc_no / numIter;
+    SR_with_AN_A(l_idx) = acc_an / numIter;
 end
 
-% --- Wykres ---
-%--figure('Color', 'w');
-plot(L_values, results_SR_no_AN, '-bo', 'LineWidth', 2); hold on;
-plot(L_values, results_SR_with_AN, '-g^', 'LineWidth', 2);
-grid on;
-xlabel('Liczba współpracujących podsłuchiwaczy (L)');
-ylabel('Secrecy Sum-Rate (bps/Hz)');
-title('Ochrona 6 GHz: Brak AN vs Sztuczny Szum (AN)');
-legend('6 GHz (Zwykłe ZF)', '6 GHz (ZF + Sztuczny Szum)', 'Location', 'SouthWest');
+% --- Sweep B: phi sweep at L = L_fixed ----------------------------------
+SR_with_AN_B = zeros(1, length(phi_values));
+for ph_idx = 1:length(phi_values)
+    acc = 0;
+    for it = 1:numIter
+        [~, SR_an] = run_AN_trial(sv, fc, Nt, K, L_fixed, ...
+                                  P_tx, PL_lin, phi_values(ph_idx), noise_var);
+        acc = acc + SR_an;
+    end
+    SR_with_AN_B(ph_idx) = acc / numIter;
+end
 
-% --- Zapisywanie wyników ---
-saveas(gcf, '../results/wykres_sztuczny_szum.png');
+% --- Visualisation -------------------------------------------------------
+fig = figure('Color', 'w', 'Position', [100 100 1100 420]);
+
+subplot(1, 2, 1);
+plot(L_values, SR_no_AN_A,   '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
+plot(L_values, SR_with_AN_A, '-g^', 'LineWidth', 2, 'MarkerFaceColor', 'g');
+grid on; box on;
+xlabel('Number of colluding eavesdroppers (L)');
+ylabel('Secrecy Sum-Rate (bits/s/Hz)');
+title(sprintf('Robustness vs L  (\\phi = %.1f)', phi_fixed));
+legend('Plain ZF', 'ZF + AN', 'Location', 'NorthEast');
+
+subplot(1, 2, 2);
+plot(phi_values, SR_with_AN_B, '-mh', 'LineWidth', 2, 'MarkerFaceColor', 'm');
+grid on; box on;
+xlabel('Data-power fraction \phi');
+ylabel('Secrecy Sum-Rate (bits/s/Hz)');
+title(sprintf('Power-allocation trade-off  (L = %d)', L_fixed));
+xline(phi_fixed, 'k:', sprintf('\\phi = %.1f', phi_fixed));
+
+sgtitle(sprintf('Artificial Noise at 6 GHz (Nt = %d, K = %d, d = %d m)', ...
+    Nt, K, dist));
+
+save_figure(fig, 'fig_artificial_noise');
+
+
+% =========================================================================
+%                          Local helper
+% =========================================================================
+function [SR_no_AN, SR_with_AN] = run_AN_trial(sv, fc, Nt, K, num_eve, ...
+                                               P_tx, PL_lin, phi, noise_var)
+    % Random user / eavesdropper geometries (uniform in azimuth)
+    theta_bobs = -60 + 120*rand(1, K);
+    theta_eves = -90 + 180*rand(1, num_eve);
+
+    H = step(sv, fc, theta_bobs);              % Nt x K
+    G = step(sv, fc, theta_eves);              % Nt x num_eve
+
+    % Standard ZF precoder (Frobenius-normalised)
+    W = H * pinv(H' * H);
+    W = W / norm(W, 'fro');
+
+    % Null space of H'   (any vector z s.t. H' z = 0  =>  Bob hears nothing)
+    Z = null(H');                              % Nt x m
+    m = size(Z, 2);
+
+    % Per-stream effective received power (after path loss)
+    P_eff = P_tx / PL_lin;
+
+    R_b_no  = zeros(K, 1); R_b_an = zeros(K, 1);
+    R_e_no  = zeros(K, 1); R_e_an = zeros(K, 1);
+    for k = 1:K
+        % Bob (no AN, full power on data)
+        sig   = P_eff * abs(H(:,k)' * W(:,k))^2;
+        R_b_no(k) = log2(1 + sig / noise_var);
+
+        % Bob (AN active: data power = phi*P_eff). AN is in null(H'),
+        % therefore H(:,k)'*Z = 0  =>  no leakage onto Bob.
+        sig_an = phi * P_eff * abs(H(:,k)' * W(:,k))^2;
+        R_b_an(k) = log2(1 + sig_an / noise_var);
+
+        % Eve(s): co-located colluding receivers, energy combining
+        leak_no = 0; leak_an = 0; an_at_eve = 0;
+        for e = 1:num_eve
+            leak_no = leak_no + P_eff * abs(G(:,e)' * W(:,k))^2;
+            leak_an = leak_an + (phi * P_eff) * abs(G(:,e)' * W(:,k))^2;
+            an_at_eve = an_at_eve + ((1-phi) * P_eff / m) * sum(abs(G(:,e)' * Z).^2);
+        end
+        R_e_no(k) = log2(1 + leak_no / noise_var);
+        R_e_an(k) = log2(1 + leak_an / (an_at_eve + noise_var));
+    end
+
+    SR_no_AN   = sum(secrecy_rate(R_b_no, R_e_no));
+    SR_with_AN = sum(secrecy_rate(R_b_an, R_e_an));
+end
