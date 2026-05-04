@@ -1,137 +1,120 @@
 % =========================================================================
-% SCENARIO: Artificial Noise (AN) injection in the null space of H'
+% BASELINE: 6 GHz Massive MIMO vs 28 GHz Ultra-Massive MIMO with FSPL
 % -------------------------------------------------------------------------
-% Goh & Hong (2011) showed that splitting BS power between data
-% (fraction phi) and isotropic noise in the null space of H' (fraction
-% 1-phi) leaks zero AN to the legitimate users while jamming any
-% off-subspace eavesdropper. We replicate the effect at 6 GHz under a
-% colluding multi-Eve attack and (a) sweep L = #Eves at fixed phi, (b)
-% sweep phi at fixed L to expose the data/noise trade-off optimum.
+% Reference setup that fixes the physical-layer parameters used by the
+% rest of the project:
+%   * sub-6 GHz : Nt = 32   antennas, FSPL @ 1 m baseline
+%   * mmWave   : Nt = 512  antennas, FSPL @ 1 m baseline
+%
+% Two precoders are evaluated per band:
+%   - MRT (matched-filter, max signal towards Bob)
+%   - ZF  (null-projection towards Eve, full energy on Bob)
 % =========================================================================
 clear; clc; close all;
 addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
 p = default_params();
 rng(p.rng_seed);
 
-% --- Configuration -------------------------------------------------------
-dist        = 30;                     % Alice <-> users distance [m]
-L_values    = 1:2:15;                 % # colluding eavesdroppers (sweep A)
-phi_values  = 0.1:0.1:1.0;            % data-power fraction (sweep B)
-L_fixed     = 7;                      % # Eves used in sweep B
-phi_fixed   = 0.7;                    % phi used in sweep A
-K           = 4;                      % legitimate users
-numIter     = 80;
-noise_var   = p.noise_var;
+dist     = 1;                          % link distance [m]
+SNR_dB   = 40:2:80;                    % transmit SNR range [dB]
+SNR_lin  = 10.^(SNR_dB/10);
+numIter  = 200;
 
-fc = p.fc_sub6;  Nt = p.Nt_sub6;
-PL_lin = compute_fspl(dist, fc);
+bands = struct( ...
+    'name', {'6 GHz', '28 GHz'}, ...
+    'fc',   {p.fc_sub6, p.fc_mmwave}, ...
+    'Nt',   {p.Nt_sub6, p.Nt_mmwave});
 
-% Operating point: 30 dB *received* SNR after path loss
-P_tx = 10^(30/10) * PL_lin;            % transmit power so that P_tx/PL = 30 dB
-
-[ula, sv] = setup_ula(Nt, fc); %#ok<ASGLU>
-
-% --- Sweep A: number of Eves at phi = phi_fixed -------------------------
-SR_no_AN_A   = zeros(1, length(L_values));
-SR_with_AN_A = zeros(1, length(L_values));
-
-for l_idx = 1:length(L_values)
-    num_eve = L_values(l_idx);
-    acc_no = 0; acc_an = 0;
-    for it = 1:numIter
-        [SR_no, SR_an] = run_AN_trial(sv, fc, Nt, K, num_eve, ...
-                                      P_tx, PL_lin, phi_fixed, noise_var);
-        acc_no = acc_no + SR_no;
-        acc_an = acc_an + SR_an;
-    end
-    SR_no_AN_A(l_idx)   = acc_no / numIter;
-    SR_with_AN_A(l_idx) = acc_an / numIter;
+% Path loss + ULA per band
+for b = 1:2
+    [bands(b).PL_lin, bands(b).PL_dB] = compute_fspl(dist, bands(b).fc);
+    [~, bands(b).sv] = setup_ula(bands(b).Nt, bands(b).fc);
 end
 
-% --- Sweep B: phi sweep at L = L_fixed ----------------------------------
-SR_with_AN_B = zeros(1, length(phi_values));
-for ph_idx = 1:length(phi_values)
-    acc = 0;
+fprintf('Path loss @  6 GHz : %.2f dB\n', bands(1).PL_dB);
+fprintf('Path loss @ 28 GHz : %.2f dB\n', bands(2).PL_dB);
+fprintf('mmWave penalty     : %.2f dB\n', bands(2).PL_dB - bands(1).PL_dB);
+
+SecrecyCap = zeros(2, 2, length(SNR_dB));    % bands x {MRT,ZF} x SNR
+
+%% Monte-Carlo
+for f_idx = 1:2
+    fc = bands(f_idx).fc;  Nt = bands(f_idx).Nt;
+    sv = bands(f_idx).sv;  L  = bands(f_idx).PL_lin;
+
     for it = 1:numIter
-        [~, SR_an] = run_AN_trial(sv, fc, Nt, K, L_fixed, ...
-                                  P_tx, PL_lin, phi_values(ph_idx), noise_var);
-        acc = acc + SR_an;
-    end
-    SR_with_AN_B(ph_idx) = acc / numIter;
-end
+        theta_b = -30; theta_e = -40;
+        hb = step(sv, fc, theta_b)';   % 1 x Nt
+        he = step(sv, fc, theta_e)';
 
-% --- Visualisation -------------------------------------------------------
-fig = figure('Color', 'w', 'Position', [100 100 1100 420]);
-
-subplot(1, 2, 1);
-plot(L_values, SR_no_AN_A,   '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
-plot(L_values, SR_with_AN_A, '-g^', 'LineWidth', 2, 'MarkerFaceColor', 'g');
-grid on; box on;
-xlabel('Number of colluding eavesdroppers (L)');
-ylabel('Secrecy Sum-Rate (bits/s/Hz)');
-title(sprintf('Robustness vs L  (\\phi = %.1f)', phi_fixed));
-legend('Plain ZF', 'ZF + AN', 'Location', 'NorthEast');
-
-subplot(1, 2, 2);
-plot(phi_values, SR_with_AN_B, '-mh', 'LineWidth', 2, 'MarkerFaceColor', 'm');
-grid on; box on;
-xlabel('Data-power fraction \phi');
-ylabel('Secrecy Sum-Rate (bits/s/Hz)');
-title(sprintf('Power-allocation trade-off  (L = %d)', L_fixed));
-xline(phi_fixed, 'k:', sprintf('\\phi = %.1f', phi_fixed));
-
-sgtitle(sprintf('Artificial Noise at 6 GHz (Nt = %d, K = %d, d = %d m)', ...
-    Nt, K, dist));
-
-save_figure(fig, 'fig_artificial_noise');
-
-
-% =========================================================================
-%                          Local helper
-% =========================================================================
-function [SR_no_AN, SR_with_AN] = run_AN_trial(sv, fc, Nt, K, num_eve, ...
-                                               P_tx, PL_lin, phi, noise_var)
-    % Random user / eavesdropper geometries (uniform in azimuth)
-    theta_bobs = -60 + 120*rand(1, K);
-    theta_eves = -90 + 180*rand(1, num_eve);
-
-    H = step(sv, fc, theta_bobs);              % Nt x K
-    G = step(sv, fc, theta_eves);              % Nt x num_eve
-
-    % Standard ZF precoder (Frobenius-normalised)
-    W = H * pinv(H' * H);
-    W = W / norm(W, 'fro');
-
-    % Null space of H'   (any vector z s.t. H' z = 0  =>  Bob hears nothing)
-    Z = null(H');                              % Nt x m
-    m = size(Z, 2);
-
-    % Per-stream effective received power (after path loss)
-    P_eff = P_tx / PL_lin;
-
-    R_b_no  = zeros(K, 1); R_b_an = zeros(K, 1);
-    R_e_no  = zeros(K, 1); R_e_an = zeros(K, 1);
-    for k = 1:K
-        % Bob (no AN, full power on data)
-        sig   = P_eff * abs(H(:,k)' * W(:,k))^2;
-        R_b_no(k) = log2(1 + sig / noise_var);
-
-        % Bob (AN active: data power = phi*P_eff). AN is in null(H'),
-        % therefore H(:,k)'*Z = 0  =>  no leakage onto Bob.
-        sig_an = phi * P_eff * abs(H(:,k)' * W(:,k))^2;
-        R_b_an(k) = log2(1 + sig_an / noise_var);
-
-        % Eve(s): co-located colluding receivers, energy combining
-        leak_no = 0; leak_an = 0; an_at_eve = 0;
-        for e = 1:num_eve
-            leak_no = leak_no + P_eff * abs(G(:,e)' * W(:,k))^2;
-            leak_an = leak_an + (phi * P_eff) * abs(G(:,e)' * W(:,k))^2;
-            an_at_eve = an_at_eve + ((1-phi) * P_eff / m) * sum(abs(G(:,e)' * Z).^2);
+        % Sub-6 GHz: add scattering. mmWave: keep LoS-dominant.
+        if f_idx == 1
+            hb = 0.8*hb + 0.2*(randn(1,Nt) + 1j*randn(1,Nt))/sqrt(2);
+            he = 0.8*he + 0.2*(randn(1,Nt) + 1j*randn(1,Nt))/sqrt(2);
         end
-        R_e_no(k) = log2(1 + leak_no / noise_var);
-        R_e_an(k) = log2(1 + leak_an / (an_at_eve + noise_var));
-    end
 
-    SR_no_AN   = sum(secrecy_rate(R_b_no, R_e_no));
-    SR_with_AN = sum(secrecy_rate(R_b_an, R_e_an));
+        % --- Precoders ---
+        w_mrt = hb' / norm(hb);
+        P_null = eye(Nt) - (he' * pinv(he*he') * he);
+        w_zf   = P_null * hb';
+        if norm(w_zf) > 1e-9
+            w_zf = w_zf / norm(w_zf);
+        else
+            w_zf = zeros(Nt, 1);
+        end
+
+        for s = 1:length(SNR_lin)
+            P_eff = SNR_lin(s) / L;
+
+            R_b = log2(1 + P_eff * abs(hb * w_mrt)^2);
+            R_e = log2(1 + P_eff * abs(he * w_mrt)^2);
+            SecrecyCap(f_idx,1,s) = SecrecyCap(f_idx,1,s) + max(0, R_b - R_e);
+
+            R_b = log2(1 + P_eff * abs(hb * w_zf)^2);
+            R_e = log2(1 + P_eff * abs(he * w_zf)^2);
+            SecrecyCap(f_idx,2,s) = SecrecyCap(f_idx,2,s) + max(0, R_b - R_e);
+        end
+    end
 end
+SecrecyCap = SecrecyCap / numIter;
+
+%% Visualisation
+snap_theta_b = -30; snap_theta_e = 20;
+angles = -90:0.05:90;
+fig = figure('Color', 'w', 'Position', [100 100 1100 800]);
+
+for f_idx = 1:2
+    fc = bands(f_idx).fc; Nt = bands(f_idx).Nt; sv = bands(f_idx).sv;
+    bandStr = [bands(f_idx).name, ' (PL included)'];
+
+    hb_s = step(sv, fc, snap_theta_b)';
+    he_s = step(sv, fc, snap_theta_e)';
+    w_mrt_s = hb_s' / norm(hb_s);
+    P_null_s = eye(Nt) - (he_s' * pinv(he_s*he_s') * he_s);
+    w_zf_s = P_null_s * hb_s'; w_zf_s = w_zf_s / norm(w_zf_s);
+
+    a_sweep = step(sv, fc, angles);
+    pat_mrt = 10*log10(abs(w_mrt_s' * a_sweep).^2);
+    pat_zf  = 10*log10(abs(w_zf_s'  * a_sweep).^2);
+
+    subplot(2, 2, f_idx);
+    plot(SNR_dB, squeeze(SecrecyCap(f_idx,1,:)), 'b-o', 'LineWidth', 1.5); hold on;
+    plot(SNR_dB, squeeze(SecrecyCap(f_idx,2,:)), 'r--s', 'LineWidth', 1.5);
+    grid on; box on;
+    title(['Secrecy: ', bandStr]);
+    xlabel('SNR (dB)'); ylabel('bits/s/Hz');
+    legend('MRT', 'ZF', 'Location', 'NorthWest');
+
+    subplot(2, 2, f_idx + 2);
+    plot(angles, pat_mrt - max(pat_mrt), 'b',  'LineWidth', 1.7); hold on;
+    plot(angles, pat_zf  - max(pat_zf),  'r--','LineWidth', 1.5);
+    xline(snap_theta_b, 'g:', 'Bob');
+    xline(snap_theta_e, 'k:', 'Eve');
+    grid on; box on;
+    title(['Normalised beam pattern: ', bandStr]);
+    xlabel('Angle (deg)'); ylabel('Gain (dB)');
+    ylim([-40 5]);
+end
+sgtitle(sprintf('6G PLS baseline at d = %g m', dist));
+
+save_figure(fig, 'fig_baseline_6GHz_vs_28GHz');
