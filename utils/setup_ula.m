@@ -4,12 +4,9 @@ function [ula, sv, lambda] = setup_ula(Nt, fc)
 %
 %   [ula, sv, lambda] = setup_ula(Nt, fc)
 %
-%   Nt     - number of antenna elements
-%   fc     - carrier frequency [Hz]
-%
-%   ula    - phased.ULA object (half-wavelength spacing)
-%   sv     - phased.SteeringVector bound to ula
-%   lambda - wavelength [m]
+%   Requires: Phased Array System Toolbox (see assert_requirements).
+
+    assert_requirements('Phased_Array_System_Toolbox');
 
     c      = physconst('LightSpeed');
     lambda = c / fc;

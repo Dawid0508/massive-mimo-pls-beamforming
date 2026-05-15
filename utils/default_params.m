@@ -5,6 +5,10 @@ function p = default_params()
 %
 %   p = default_params() returns a struct with the fields below. Override
 %   any field in the calling script after retrieving the struct.
+%
+%   Requires Phased Array System Toolbox (physconst); see assert_requirements.
+
+    assert_requirements('Phased_Array_System_Toolbox');
 
     p.c          = physconst('LightSpeed');
 
@@ -15,11 +19,20 @@ function p = default_params()
     p.Nt_mmwave  = 512;          % Antennas at mmWave BS
 
     % --- Power / noise convention --------------------------------------
-    %   Noise variance is fixed at 1 (linear). All "SNR" values are
-    %   transmit-side SNR in dB; effective received SNR equals
-    %   10^(SNR_dB/10) / FSPL_lin.
+    %   Noise variance is fixed at 1 (linear). SNR_dB is always the
+    %   *received* SNR at Bob after path loss. Transmit power:
+    %       P_tx = rx_snr_power('tx_for_rx', SNR_dB, PL_lin)
+    %   Abstract scenarios (no FSPL) use unit-variance Rayleigh channels;
+    %   there received SNR equals the configured linear power in the rate.
     p.noise_var  = 1;
-    p.SNR_dB     = 30;           % default operating point [dB]
+    p.SNR_rx_dB  = 30;           % default received SNR at Bob [dB]
+    p.SNR_dB     = p.SNR_rx_dB;  % alias for backward compatibility
+    p.link_dist_m = 30;          % default Alice–user distance [m]
+    p.eve_attn_dB = 15;          % Eve channel attenuation (abstract Rayleigh)
+
+    % --- 3GPP TR 38.901 CDL tags (used by channel_3gpp_ula) ------------
+    p.cdl_sub6    = 'sub6';      % CDL-A-like at 6 GHz
+    p.cdl_mmwave  = 'mmwave';    % CDL-D-like at 28 GHz
 
     % --- Monte-Carlo --------------------------------------------------
     p.numIter    = 200;          % default Monte-Carlo iterations

@@ -18,7 +18,7 @@
 %   (2) Wiener predictor   - precoder built on h_hat[tau] from L taps
 %   (3) Perfect CSI        - oracle baseline (precoder built on h[tau])
 % =========================================================================
-clear; clc; close all;
+pls_startup();
 addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
 p = default_params();
 rng(p.rng_seed);
@@ -33,9 +33,13 @@ L_vec       = 1:6;                    % Wiener predictor order
 L_fixed     = 4;
 delta_t     = 1e-3;                   % time slot duration [s]
 tau         = 1;                      % prediction horizon (slots ahead)
-SNR_dB      = 20;
-P_tot       = 10^(SNR_dB/10);
+SNR_rx_dB   = 20;
+P_rx        = rx_snr_power('linear', SNR_rx_dB);
 noise_var   = p.noise_var;
+
+print_scenario_snr('title', 'CSI aging @ 6 GHz', ...
+    'SNR_rx_dB', SNR_rx_dB, 'dist_m', p.link_dist_m, 'fc_Hz', p.fc_sub6, ...
+    'actors', {sprintf('Bob (K=%d)', K), 'Eve'});
 numIter     = 250;
 
 % Result storage
@@ -53,19 +57,20 @@ for v_idx = 1:length(v_kmh_vec)
     v = v_kmh_vec(v_idx);
     rho_curve(v_idx) = jakes_correlation(v, fc, delta_t);
     [SR_no(v_idx), SR_wiener(v_idx), SR_perfect(v_idx)] = ...
-        run_aging_trial(Nt, K, P_tot, noise_var, numIter, ...
+        run_aging_trial(Nt, K, P_rx, noise_var, numIter, ...
                         v, fc, delta_t, tau, L_fixed);
 end
 
 % --- Sweep B: predictor order L at v = v_fixed --------------------------
 for l_idx = 1:length(L_vec)
     [SR_vs_L_no(l_idx), SR_vs_L_wiener(l_idx), SR_vs_L_perfect(l_idx)] = ...
-        run_aging_trial(Nt, K, P_tot, noise_var, numIter, ...
+        run_aging_trial(Nt, K, P_rx, noise_var, numIter, ...
                         v_fixed, fc, delta_t, tau, L_vec(l_idx));
 end
 
 % --- Visualisation -------------------------------------------------------
-fig = figure('Color', 'w', 'Position', [100 100 1200 760]);
+c = pls_colors();
+fig = figure('Color', c.bg, 'Position', [100 100 1200 760]);
 
 % Top-left: Jakes correlation vs velocity
 subplot(2, 2, 1);
@@ -78,23 +83,24 @@ title(sprintf('Jakes correlation @ %.0f GHz, \\Delta t = %.0f ms', fc/1e9, delta
 subplot(2, 2, 2);
 plot(v_kmh_vec, SR_no,      '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r'); hold on;
 plot(v_kmh_vec, SR_wiener,  '-go', 'LineWidth', 2, 'MarkerFaceColor', 'g');
-plot(v_kmh_vec, SR_perfect, '-k^', 'LineWidth', 2, 'MarkerFaceColor', 'k');
+plot(v_kmh_vec, SR_perfect, '-^', 'Color', c.perfect, 'LineWidth', 2, ...
+    'MarkerFaceColor', c.perfect, 'DisplayName', 'Perfect CSI');
 grid on; box on;
 xlabel('UE velocity (km/h)'); ylabel('Secrecy Sum-Rate (bits/s/Hz)');
 title('Three strategies under CSI aging');
-legend(sprintf('No prediction  (L=%d-tap Wiener disabled)', L_fixed), ...
-       sprintf('Wiener (L = %d)', L_fixed), 'Perfect CSI (oracle)', ...
-       'Location', 'NorthEast');
+legend('No prediction', sprintf('Wiener (L=%d)', L_fixed), 'Perfect CSI', ...
+       'Location', 'East');
 
 % Bottom-left: Secrecy vs predictor order L at v_fixed
 subplot(2, 2, 3);
 plot(L_vec, SR_vs_L_no,      '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r'); hold on;
 plot(L_vec, SR_vs_L_wiener,  '-go', 'LineWidth', 2, 'MarkerFaceColor', 'g');
-plot(L_vec, SR_vs_L_perfect, '-k^', 'LineWidth', 2, 'MarkerFaceColor', 'k');
+plot(L_vec, SR_vs_L_perfect, '-^', 'Color', c.perfect, 'LineWidth', 2, ...
+    'MarkerFaceColor', c.perfect, 'DisplayName', 'Perfect CSI');
 grid on; box on;
 xlabel('Wiener predictor order L'); ylabel('Secrecy Sum-Rate (bits/s/Hz)');
 title(sprintf('Diminishing returns of predictor order  (v = %d km/h)', v_fixed));
-legend('No prediction', 'Wiener', 'Perfect CSI', 'Location', 'East');
+legend('No prediction', 'Wiener', 'Perfect CSI', 'Location', 'West');
 
 % Bottom-right: relative gain of Wiener over No-prediction
 subplot(2, 2, 4);
@@ -112,7 +118,7 @@ save_figure(fig, 'fig_csi_aging');
 % =========================================================================
 %                          Local helper
 % =========================================================================
-function [SR_no, SR_w, SR_p] = run_aging_trial(Nt, K, P_tot, noise_var, ...
+function [SR_no, SR_w, SR_p] = run_aging_trial(Nt, K, P_rx, noise_var, ...
                                                numIter, v, fc, dt, tau, L)
 % Runs numIter Monte-Carlo trials and returns the three Secrecy Sum-Rates.
 
@@ -179,9 +185,9 @@ function [SR_no, SR_w, SR_p] = run_aging_trial(Nt, K, P_tot, noise_var, ...
         % --- Strategy 3: perfect CSI ---------------------------------
         H_used_p = H_now;
 
-        SR_no = SR_no + secrecy_with_estimate(H_used_no, H_now, h_eve, P_tot, noise_var);
-        SR_w  = SR_w  + secrecy_with_estimate(H_used_w,  H_now, h_eve, P_tot, noise_var);
-        SR_p  = SR_p  + secrecy_with_estimate(H_used_p,  H_now, h_eve, P_tot, noise_var);
+        SR_no = SR_no + secrecy_with_estimate(H_used_no, H_now, h_eve, P_rx, noise_var);
+        SR_w  = SR_w  + secrecy_with_estimate(H_used_w,  H_now, h_eve, P_rx, noise_var);
+        SR_p  = SR_p  + secrecy_with_estimate(H_used_p,  H_now, h_eve, P_rx, noise_var);
     end
 
     SR_no = SR_no / numIter;
@@ -190,13 +196,13 @@ function [SR_no, SR_w, SR_p] = run_aging_trial(Nt, K, P_tot, noise_var, ...
 end
 
 
-function SR = secrecy_with_estimate(H_est, H_true, h_eve, P_tot, noise_var)
+function SR = secrecy_with_estimate(H_est, H_true, h_eve, P_rx, noise_var)
 % Builds a ZF precoder from H_est, evaluates it on the true channel
 % H_true (Bob) and the eavesdropper h_eve, and returns Secrecy Sum-Rate.
 
     K = size(H_est, 2);
     W_raw = H_est * pinv(H_est' * H_est + 1e-9*eye(K));
-    W = W_raw / norm(W_raw, 'fro') * sqrt(P_tot);
+    W = W_raw / norm(W_raw, 'fro') * sqrt(P_rx);
 
     R_b = zeros(K, 1); R_e = zeros(K, 1);
     for k = 1:K

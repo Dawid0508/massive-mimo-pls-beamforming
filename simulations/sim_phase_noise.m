@@ -14,7 +14,7 @@
 % towards the eavesdropper. We compare 6 GHz (Nt = 32) and 28 GHz
 % (Nt = 512) and contrast Matrix vs Vector ZF normalization.
 % =========================================================================
-clear; clc; close all;
+pls_startup();
 addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
 p = default_params();
 rng(p.rng_seed);
@@ -23,14 +23,15 @@ rng(p.rng_seed);
 sigma_deg_vec = 0:1:15;                     % phase-error std [deg]
 K             = 4;                          % users
 numIter       = 80;
-SNR_dB        = 20;
-P_tot         = 10^(SNR_dB/10);
+dist          = p.link_dist_m;
+SNR_rx_dB     = 20;
 noise_var     = p.noise_var;
 
 bands = struct( ...
     'name',  {'6 GHz (Nt=32)', '28 GHz (Nt=512)'}, ...
     'fc',    {p.fc_sub6, p.fc_mmwave}, ...
-    'Nt',    {p.Nt_sub6, p.Nt_mmwave});
+    'Nt',    {p.Nt_sub6, p.Nt_mmwave}, ...
+    'cdl',   {p.cdl_sub6, p.cdl_mmwave});
 
 SR_results = zeros(2, 2, length(sigma_deg_vec));   % {6/28 GHz} x {Matrix,Vector} x sigma
 
@@ -43,7 +44,11 @@ theta_e   =  15;
 
 % --- Sweep ---------------------------------------------------------------
 for b = 1:2
-    fc = bands(b).fc;  Nt = bands(b).Nt;
+    fc = bands(b).fc;  Nt = bands(b).Nt;  cdl = bands(b).cdl;
+    P_rx = rx_snr_power('linear', SNR_rx_dB);
+    print_scenario_snr('title', sprintf('Phase noise @ %s', bands(b).name), ...
+        'SNR_rx_dB', SNR_rx_dB, 'dist_m', dist, 'fc_Hz', fc, ...
+        'actors', {sprintf('Bob (K=%d)', K), 'Eve'});
     [~, sv] = setup_ula(Nt, fc);
 
     for s_idx = 1:length(sigma_deg_vec)
@@ -51,18 +56,20 @@ for b = 1:2
         SR_acc = zeros(2, 1);
 
         for it = 1:numIter
-            % LoS-dominant geometry typical of mmWave / line of sight
             theta_bobs = -60 + 120*rand(1, K);
-            H = step(sv, fc, theta_bobs);            % Nt x K
-            h_eve = step(sv, fc, -90 + 180*rand);    % single colocated Eve
+            H = zeros(Nt, K);
+            for k = 1:K
+                H(:, k) = channel_3gpp_ula(sv, fc, theta_bobs(k), cdl);
+            end
+            h_eve = channel_3gpp_ula(sv, fc, -90 + 180*rand, cdl);
 
             W_raw = H * pinv(H' * H);
-            W_mat = W_raw / norm(W_raw, 'fro') * sqrt(P_tot);
+            W_mat = W_raw / norm(W_raw, 'fro') * sqrt(P_rx);
             W_vec = zeros(Nt, K);
             for k = 1:K
                 col = W_raw(:, k);
                 if norm(col) > 1e-9
-                    W_vec(:, k) = col / norm(col) * sqrt(P_tot / K);
+                    W_vec(:, k) = col / norm(col) * sqrt(P_rx / K);
                 end
             end
 
@@ -75,12 +82,12 @@ for b = 1:2
                 if n_idx == 1, W = W_mat_e; else, W = W_vec_e; end
                 R_b = zeros(K, 1); R_e = zeros(K, 1);
                 for k = 1:K
-                    sig    = abs(H(:,k)' * W(:,k))^2;
-                    intf   = sum(abs(H(:,k)' * W).^2) - sig;
+                    sig    = P_rx * abs(H(:,k)' * W(:,k))^2;
+                    intf   = P_rx * (sum(abs(H(:,k)' * W).^2) - abs(H(:,k)' * W(:,k))^2);
                     R_b(k) = log2(1 + sig / (intf + noise_var));
 
-                    sig_e  = abs(h_eve' * W(:,k))^2;
-                    intf_e = sum(abs(h_eve' * W).^2) - sig_e;
+                    sig_e  = P_rx * abs(h_eve' * W(:,k))^2;
+                    intf_e = P_rx * (sum(abs(h_eve' * W).^2) - abs(h_eve' * W(:,k))^2);
                     R_e(k) = log2(1 + sig_e / (intf_e + noise_var));
                 end
                 SR_acc(n_idx) = SR_acc(n_idx) + sum(secrecy_rate(R_b, R_e));
@@ -91,8 +98,8 @@ for b = 1:2
 
     % Beam-pattern snapshots (mmWave only)
     if b == 2
-        h_b = step(sv, fc, theta_b);
-        h_e = step(sv, fc, theta_e);
+        h_b = channel_3gpp_ula(sv, fc, theta_b, cdl);
+        h_e = channel_3gpp_ula(sv, fc, theta_e, cdl);
         % Single-stream MRT-style design just to visualise distortion
         w0 = h_b / norm(h_b);
         a_sweep = step(sv, fc, angles);
@@ -140,15 +147,17 @@ colors = lines(length(sigma_snap_deg));
 for ss = 1:length(sigma_snap_deg)
     plot(angles, bp_snap(ss,:) - max(bp_snap(ss,:)), 'LineWidth', 2, 'Color', colors(ss,:)); hold on;
 end
-xline(theta_b, 'g:', sprintf('Bob (%d^{\\circ})', theta_b), 'LineWidth', 1.5);
-xline(theta_e, 'k:', sprintf('Eve (+%d^{\\circ})', theta_e), 'LineWidth', 1.5);
+mark_eve(theta_e, sprintf('Eve (+%d^{\\circ})', theta_e), 'left');
+mark_bob(theta_b, sprintf('Bob (%d^{\\circ})', theta_b), 'right');
+pls_axis_prefs(gca, 'refLabelV', 'top');
 grid on; box on;
 xlim([-90 90]); ylim([-40 5]);
 xlabel('Angle (deg)'); ylabel('Normalised gain (dB)');
 title('mmWave beam smearing under phase noise');
 legend(arrayfun(@(s) sprintf('\\sigma_\\phi = %d^{\\circ}', s), sigma_snap_deg, 'UniformOutput', false), ...
-       'Location', 'South');
+       'Location', 'SouthWest');
 
-sgtitle(sprintf('Hardware phase noise vs Secrecy Rate  (K = %d, SNR = %d dB)', K, SNR_dB));
+sgtitle(sprintf('Phase noise (3GPP CDL, K = %d, received SNR = %d dB, d = %d m)', ...
+    K, SNR_rx_dB, dist));
 
 save_figure(fig, 'fig_phase_noise');

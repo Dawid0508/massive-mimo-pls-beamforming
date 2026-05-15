@@ -1,0 +1,27 @@
+# --- Regenerated locally (not curated figures) ------------------------------
+results/*.log
+results/*.fig
+
+# --- MATLAB ---------------------------------------------------------------
+*.asv
+*.m~
+*.autosave
+*.mlappinstall
+*.slxc
+*.slx.autosave
+slprj/
+codegen/
+*.prj-user
+
+# Local data / checkpoints
+*.mat
+
+# --- OS -------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Editors / IDE (local only) -------------------------------------------
+.vscode/
+.idea/
+*.code-workspace

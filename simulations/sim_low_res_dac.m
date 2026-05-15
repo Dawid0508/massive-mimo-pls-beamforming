@@ -19,20 +19,26 @@
 % This script uses the *direct* uniform quantiser (utils/uniform_quantize)
 % and reports Bob, Eve, and Secrecy Sum-Rates for b = {1, 2, 3, 4, Inf}.
 % =========================================================================
-clear; clc; close all;
+pls_startup();
 addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
 p = default_params();
 rng(p.rng_seed);
 
 % --- Configuration -------------------------------------------------------
 b_vec       = [1 2 3 4 5 Inf];               % DAC bits per I/Q branch
-SNR_dB_vec  = 0:5:30;                        % SNR sweep for the second panel
+SNR_rx_vec  = 0:5:30;                        % received SNR sweep
 SNR_fixed   = 20;                            % dB, used for the b sweep
 Nt          = 64;
 K           = 4;
 numIter     = 80;
 numSym      = 64;                            % symbols per Monte-Carlo run
 noise_var   = p.noise_var;
+
+print_scenario_snr('title', 'Low-resolution DAC', ...
+    'SNR_rx_dB', SNR_fixed, ...
+    'actors', {sprintf('Bob (K=%d)', K), 'Eve'}, ...
+    'notes', sprintf('SNR sweep (received): %d:%d:%d dB', ...
+        SNR_rx_vec(1), SNR_rx_vec(2)-SNR_rx_vec(1), SNR_rx_vec(end)));
 
 % Result storage at SNR_fixed
 R_bob   = zeros(1, length(b_vec));
@@ -41,13 +47,13 @@ R_sec   = zeros(1, length(b_vec));
 
 % Result storage for SNR sweep at b in {1, 2, Inf}
 b_show  = [1, 2, Inf];
-R_sec_snr = zeros(length(b_show), length(SNR_dB_vec));
+R_sec_snr = zeros(length(b_show), length(SNR_rx_vec));
 
 % Empirical Bussgang factor a(b) - useful auxiliary curve
 a_emp   = zeros(size(b_vec));
 
 % --- Sweep A: Secrecy decomposition vs DAC bits --------------------------
-P_tot = 10^(SNR_fixed/10);
+P_rx = rx_snr_power('linear', SNR_fixed);
 for bi = 1:length(b_vec)
     b = b_vec(bi);
     acc_b = 0; acc_e = 0; acc_s = 0;
@@ -58,7 +64,7 @@ for bi = 1:length(b_vec)
         h_eve = (randn(Nt, 1) + 1j*randn(Nt, 1)) / sqrt(2);
 
         W_raw = H * pinv(H' * H);
-        W = W_raw / norm(W_raw, 'fro') * sqrt(P_tot);
+        W = W_raw / norm(W_raw, 'fro') * sqrt(P_rx);
 
         % i.i.d. Gaussian symbols
         s   = (randn(K, numSym) + 1j*randn(K, numSym)) / sqrt(2);
@@ -108,14 +114,14 @@ end
 % --- Sweep B: SNR vs Secrecy at three DAC resolutions --------------------
 for ii = 1:length(b_show)
     b = b_show(ii);
-    for s_idx = 1:length(SNR_dB_vec)
-        P_tot = 10^(SNR_dB_vec(s_idx)/10);
+    for s_idx = 1:length(SNR_rx_vec)
+        P_rx = rx_snr_power('linear', SNR_rx_vec(s_idx));
         acc_s = 0;
         for it = 1:numIter
             H     = (randn(Nt, K) + 1j*randn(Nt, K)) / sqrt(2);
             h_eve = (randn(Nt, 1) + 1j*randn(Nt, 1)) / sqrt(2);
             W_raw = H * pinv(H' * H);
-            W     = W_raw / norm(W_raw, 'fro') * sqrt(P_tot);
+            W     = W_raw / norm(W_raw, 'fro') * sqrt(P_rx);
 
             s   = (randn(K, numSym) + 1j*randn(K, numSym)) / sqrt(2);
             x   = W * s;
@@ -150,7 +156,7 @@ set(gca, 'XTick', bar_x, 'XTickLabel', bar_labels);
 xlabel('DAC resolution b (bits / I-or-Q branch)');
 ylabel('Sum-Rate (bits/s/Hz)');
 title(sprintf('Bob vs Eve under quantisation  (SNR = %d dB)', SNR_fixed));
-legend('Bob (legitimate)', 'Eve (eavesdropper)', 'Location', 'NorthWest');
+legend('Bob', 'Eve', 'Location', 'NorthWest');
 
 % Top-right: Secrecy Sum-Rate vs b
 subplot(2, 2, 2);
@@ -166,7 +172,8 @@ subplot(2, 2, 3);
 b_finite = b_vec(~isinf(b_vec));
 a_finite = a_emp(~isinf(b_vec));
 bar(b_finite, a_finite, 0.6, 'FaceColor', [0.6 0.4 0.8]); hold on;
-yline(1, 'k--', 'Ideal DAC: a = 1', 'LineWidth', 1.2);
+c = pls_colors();
+yline(1, '--', 'Ideal DAC: a = 1', 'Color', c.perfect, 'LineWidth', 1.2);
 grid on; box on;
 xlabel('DAC bits b'); ylabel('Bussgang gain a');
 title('Empirical Bussgang factor');
@@ -174,13 +181,13 @@ ylim([0 1.05]);
 
 % Bottom-right: Secrecy Sum-Rate vs SNR for selected b
 subplot(2, 2, 4);
-markers = {'-bo', '-ms', '-k^'};
+markers = {'-bo', '-ms', '-c^'};
 hold on;
 for ii = 1:length(b_show)
-    plot(SNR_dB_vec, R_sec_snr(ii,:), markers{ii}, 'LineWidth', 2, 'MarkerFaceColor', markers{ii}(2));
+    plot(SNR_rx_vec, R_sec_snr(ii,:), markers{ii}, 'LineWidth', 2, 'MarkerFaceColor', markers{ii}(2));
 end
 grid on; box on;
-xlabel('Transmit SNR (dB)'); ylabel('Secrecy Sum-Rate (bits/s/Hz)');
+xlabel('Received SNR (dB, norm. Rayleigh)'); ylabel('Secrecy Sum-Rate (bits/s/Hz)');
 title('Secrecy Sum-Rate vs SNR per DAC resolution');
 labels = arrayfun(@(b) ternary(isinf(b), 'b = Inf (ideal)', sprintf('b = %d bit', b)), b_show, 'UniformOutput', false);
 legend(labels, 'Location', 'NorthWest');

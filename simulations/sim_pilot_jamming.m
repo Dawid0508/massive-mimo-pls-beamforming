@@ -26,7 +26,7 @@
 %   (B) JPR vs Nt heat-map showing how Massive MIMO mitigates jamming
 %       through training-sequence correlation gain (longer tau).
 % =========================================================================
-clear; clc; close all;
+pls_startup();
 addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
 p = default_params();
 rng(p.rng_seed);
@@ -36,11 +36,17 @@ Nt          = 64;
 K           = 4;
 tau         = K;                      % minimum orthogonal pilot length
 JPR_dB_vec  = -10:5:30;               % jammer-to-pilot ratio [dB]
-SNR_dB      = 20;
-P_pilot     = 10^(SNR_dB/10);
-P_data      = P_pilot;                % data SNR = pilot SNR (typical)
+SNR_rx_dB   = 20;
+P_pilot     = rx_snr_power('linear', SNR_rx_dB);
+P_data      = P_pilot;                % received pilot/data power at Bob
 noise_var   = p.noise_var;
 numIter     = 200;
+
+print_scenario_snr('title', 'Pilot jamming (training phase)', ...
+    'SNR_rx_dB', SNR_rx_dB, ...
+    'actors', {sprintf('Bob (K=%d)', K), 'Jammer (Eve)'}, ...
+    'notes', sprintf('Pilot/data received SNR at Bob; JPR sweep %d:%d:%d dB', ...
+        JPR_dB_vec(1), JPR_dB_vec(2)-JPR_dB_vec(1), JPR_dB_vec(end)));
 
 precoders   = {'MRT', 'ZF'};
 
@@ -167,7 +173,9 @@ subplot(2, 2, 1);
 plot(JPR_dB_vec, R_b(2,:), '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
 plot(JPR_dB_vec, R_e(2,:), '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
 plot(JPR_dB_vec, R_s(2,:), '-g^', 'LineWidth', 2, 'MarkerFaceColor', 'g');
-yline(R_s_perfect(2), 'k:', 'Perfect CSI', 'LineWidth', 1.5);
+c = pls_colors();
+yline(R_s_perfect(2), ':', 'Perfect CSI', 'Color', c.perfect, 'LineWidth', 1.5);
+pls_axis_prefs(gca, 'refLabelV', 'bottom', 'staggerRef', true);
 grid on; box on;
 xlabel('Jammer-to-Pilot Ratio (dB)'); ylabel('Rate (bits/s/Hz)');
 title('ZF under pilot jamming');
@@ -179,6 +187,7 @@ plot(JPR_dB_vec, R_s(1,:), '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold 
 plot(JPR_dB_vec, R_s(2,:), '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
 yline(R_s_perfect(1), 'b:', sprintf('MRT perfect: %.2f', R_s_perfect(1)), 'LineWidth', 1.2);
 yline(R_s_perfect(2), 'r:', sprintf('ZF perfect: %.2f',  R_s_perfect(2)), 'LineWidth', 1.2);
+pls_axis_prefs(gca, 'refLabelV', 'bottom', 'staggerRef', true);
 grid on; box on;
 xlabel('Jammer-to-Pilot Ratio (dB)'); ylabel('Secrecy Sum-Rate (bits/s/Hz)');
 title('MRT vs ZF robustness to jamming');
@@ -204,7 +213,7 @@ legend(sprintf('JPR = %d dB (heavy)', JPR_grid_dB(end)), ...
        sprintf('JPR = %d dB (mild)', JPR_grid_dB(1)), ...
        'Location', 'NorthWest');
 
-sgtitle(sprintf('Pilot jamming (DoS attack on training)  (K = %d, \\tau = %d, SNR = %d dB)', ...
-    K, tau, SNR_dB));
+sgtitle(sprintf('Pilot jamming (DoS)  (K = %d, \\tau = %d, received SNR = %d dB)', ...
+    K, tau, SNR_rx_dB));
 
 save_figure(fig, 'fig_pilot_jamming');

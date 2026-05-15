@@ -1,24 +1,30 @@
-function save_figure(fig_handle, filename)
-% SAVE_FIGURE  Persist a figure with white background to /results.
+function save_figure(fig_handle, filename, output_dir)
+% SAVE_FIGURE  Persist a figure with dark background to /results.
 %
 %   save_figure(fig_handle, filename)
+%   save_figure(fig_handle, filename, output_dir)   % optional override
 %
-%   fig_handle - handle returned by figure(); if empty, uses gcf
-%   filename   - basename without extension; resolved against /results
+%   Applies apply_plot_style (black background, light axes, no black strokes)
+%   before export.
 
     if nargin < 1 || isempty(fig_handle)
         fig_handle = gcf;
     end
 
-    set(fig_handle, 'Color', 'w');
-    set(fig_handle, 'InvertHardcopy', 'off');   % preserve white bg on print
+    apply_plot_style(fig_handle);
 
     p = default_params();
-    if ~exist(p.results_dir, 'dir')
-        mkdir(p.results_dir);
+    if nargin >= 3 && ~isempty(output_dir)
+        out_dir = output_dir;
+    else
+        out_dir = p.results_dir;
     end
-    out_path = fullfile(p.results_dir, [filename, '.png']);
+    if ~exist(out_dir, 'dir')
+        mkdir(out_dir);
+    end
+    out_path = fullfile(out_dir, [filename, '.png']);
+    c = pls_colors();
     exportgraphics(fig_handle, out_path, 'Resolution', 200, ...
-                   'BackgroundColor', 'white');
+                   'BackgroundColor', c.bg);
     fprintf('[save_figure] saved -> %s\n', out_path);
 end

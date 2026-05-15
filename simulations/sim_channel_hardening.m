@@ -18,7 +18,7 @@
 %   - sweeps Nt and reports both Var(||h||^2/Nt) (fundamental) and
 %     Std(R_secrecy) (operational consequence)
 % =========================================================================
-clear; clc; close all;
+pls_startup();
 addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
 p = default_params();
 rng(p.rng_seed);
@@ -27,9 +27,12 @@ rng(p.rng_seed);
 Nt_vec       = [4 8 16 32 64 128 256 512];
 Nt_hist      = [4, 256];                 % values shown as histograms
 numIter      = 4000;                     % heavy MC for clean variance curves
-SNR_dB       = 20;
-P_tot        = 10^(SNR_dB/10);
+SNR_rx_dB    = 20;
+P_rx         = rx_snr_power('linear', SNR_rx_dB);
 noise_var    = p.noise_var;
+
+print_scenario_snr('title', 'Channel hardening', ...
+    'SNR_rx_dB', SNR_rx_dB, 'actors', {'Bob', 'Eve'});
 
 var_norm_h   = zeros(size(Nt_vec));      % Var(||h||^2 / Nt)
 mean_norm_h  = zeros(size(Nt_vec));
@@ -51,8 +54,8 @@ for n_idx = 1:length(Nt_vec)
 
         % MRT towards Bob (single-user illustrative case)
         w   = h_b / norm(h_b);
-        R_b = log2(1 + P_tot * abs(h_b' * w)^2 / noise_var);
-        R_e = log2(1 + P_tot * abs(h_e' * w)^2 / noise_var);
+        R_b = log2(1 + P_rx * abs(h_b' * w)^2 / noise_var);
+        R_e = log2(1 + P_rx * abs(h_e' * w)^2 / noise_var);
         R_samples(it) = secrecy_rate(R_b, R_e);
     end
     mean_norm_h(n_idx) = mean(g_samples);
@@ -81,16 +84,21 @@ for i = 1:length(Nt_hist)
         'FaceColor', colors(i,:), 'FaceAlpha', 0.55, ...
         'DisplayName', sprintf('Nt = %d', Nt_hist(i))); hold on;
 end
-xline(1, 'k--', 'E[||h||^2/N_t] = 1', 'LineWidth', 1.2);
+c = pls_colors();
+xline(1, '--', 'E[||h||^2/N_t] = 1', 'Color', c.ref, 'LineWidth', 1.2);
+pls_axis_prefs(gca, 'refLabelV', 'top');
 grid on; box on;
 xlabel('||h||^2 / N_t'); ylabel('PDF');
 title('Channel hardening: distribution of normalised gain');
-legend('Location', 'NorthEast');
+legend(arrayfun(@(n) sprintf('N_t = %d', n), Nt_hist, 'UniformOutput', false), ...
+    'Location', 'NorthEast');
 
 % Top-right: Var(||h||^2/Nt) vs Nt with theory line
 subplot(2, 2, 2);
-loglog(Nt_vec, var_norm_h, '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
-loglog(Nt_vec, var_theory, 'k--', 'LineWidth', 1.5);
+loglog(Nt_vec, var_norm_h, '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b', ...
+    'DisplayName', 'Monte-Carlo'); hold on;
+loglog(Nt_vec, var_theory, '--', 'Color', c.ref, 'LineWidth', 1.5, ...
+    'DisplayName', 'Theory 1/N_t');
 grid on; box on;
 xlabel('Number of antennas N_t'); ylabel('Var(||h||^2 / N_t)');
 title('Hardening rate: Var \propto 1/N_t');
@@ -101,7 +109,7 @@ subplot(2, 2, 3);
 semilogx(Nt_vec, mean_R_sec, '-go', 'LineWidth', 2, 'MarkerFaceColor', 'g');
 grid on; box on;
 xlabel('Number of antennas N_t'); ylabel('E[R_{sec}] (bits/s/Hz)');
-title(sprintf('Mean Secrecy Rate vs N_t  (SNR = %d dB)', SNR_dB));
+title(sprintf('Mean Secrecy Rate vs N_t  (received SNR = %d dB)', SNR_rx_dB));
 
 % Bottom-right: std of Secrecy Rate vs Nt - operational hardening
 subplot(2, 2, 4);

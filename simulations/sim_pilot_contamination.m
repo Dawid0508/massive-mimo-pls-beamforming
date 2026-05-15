@@ -1,72 +1,58 @@
 % =========================================================================
 % SCENARIO: Active pilot contamination ("beam hijacking")
 % -------------------------------------------------------------------------
-% During the uplink training phase Eve transmits the same pilot as Bob,
-% scaled by sqrt(beta). The BS estimates the *combined* channel and
-% steers a Matched-Filter beam towards a phantom user located between
-% Bob and Eve. As beta -> 1 the beam swings towards Eve and the
-% Secrecy Rate collapses to zero — the canonical PLS failure mode of
-% Massive MIMO with TDD reciprocity.
-%
-% We run the attack at both 6 GHz (Nt = 32) and 28 GHz (Nt = 512). The
-% mmWave array's pencil-thin beams are *more* sensitive to a small
-% pointing error, so the secrecy collapse there is more abrupt.
+% 3GPP CDL channels at 6 GHz vs 28 GHz; received SNR at Bob after FSPL.
 % =========================================================================
-clear; clc; close all;
+pls_startup();
 addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
 p = default_params();
 rng(p.rng_seed);
 
-% --- Configuration -------------------------------------------------------
-beta_values = 0:0.05:1;            % relative power of Eve's fake pilot
-theta_bob   = -30;                 % Bob's bearing  [deg]
-theta_eve   =  20;                 % Eve's bearing  [deg]
+beta_values = 0:0.05:1;
+theta_bob   = -30;
+theta_eve   =  20;
+dist        = p.link_dist_m;
 numIter     = 120;
-SNR_dB      = 20;
-P_tx        = 10^(SNR_dB/10);
+SNR_rx_dB   = 20;
 noise_var   = p.noise_var;
-sigma_est   = 0.05;                % training noise std
+sigma_est   = 0.05;
 
 bands = struct( ...
     'name',  {'6 GHz', '28 GHz'}, ...
     'fc',    {p.fc_sub6, p.fc_mmwave}, ...
-    'Nt',    {p.Nt_sub6, p.Nt_mmwave});
+    'Nt',    {p.Nt_sub6, p.Nt_mmwave}, ...
+    'cdl',   {p.cdl_sub6, p.cdl_mmwave});
 
 angles = -90:0.5:90;
 SR_curves   = zeros(2, length(beta_values));
 beam_clean  = zeros(2, length(angles));
 beam_hijack = zeros(2, length(angles));
 
-% --- Sweep ---------------------------------------------------------------
 for b = 1:2
-    fc = bands(b).fc;  Nt = bands(b).Nt;
+    fc = bands(b).fc;  Nt = bands(b).Nt;  cdl = bands(b).cdl;
+    PL_lin = compute_fspl(dist, fc);
+    P_rx   = rx_snr_power('linear', SNR_rx_dB);
+    print_scenario_snr('title', sprintf('Pilot contamination @ %s', bands(b).name), ...
+        'SNR_rx_dB', SNR_rx_dB, 'dist_m', dist, 'fc_Hz', fc, ...
+        'actors', {'Bob', 'Eve'});
     [~, sv] = setup_ula(Nt, fc);
-
-    a_sweep = step(sv, fc, angles);    % Nt x #angles, for beam patterns
+    a_sweep = step(sv, fc, angles);
 
     for be_idx = 1:length(beta_values)
         beta = beta_values(be_idx);
         SR_acc = 0;
         bp_acc = zeros(length(angles), 1);
         for it = 1:numIter
-            % True channels with mild scattering
-            h_b = step(sv, fc, theta_bob);
-            h_e = step(sv, fc, theta_eve);
-            h_b_c = 0.8*h_b + 0.2*(randn(Nt,1) + 1j*randn(Nt,1))/sqrt(2);
-            h_e_c = 0.8*h_e + 0.2*(randn(Nt,1) + 1j*randn(Nt,1))/sqrt(2);
+            h_b = channel_3gpp_ula(sv, fc, theta_bob, cdl);
+            h_e = channel_3gpp_ula(sv, fc, theta_eve, cdl);
 
-            % Pilot phase: BS estimates Bob's channel but receives
-            % Eve's contamination on top of it.
             n_est = sigma_est * (randn(Nt,1) + 1j*randn(Nt,1))/sqrt(2);
-            h_est = h_b_c + sqrt(beta) * h_e_c + n_est;
-
-            % MF precoder built on the *contaminated* estimate
+            h_est = h_b + sqrt(beta) * h_e + n_est;
             w = h_est / norm(h_est);
 
-            R_b = log2(1 + P_tx * abs(h_b_c' * w)^2 / noise_var);
-            R_e = log2(1 + P_tx * abs(h_e_c' * w)^2 / noise_var);
+            R_b = log2(1 + P_rx * abs(h_b' * w)^2 / noise_var);
+            R_e = log2(1 + P_rx * abs(h_e' * w)^2 / noise_var);
             SR_acc = SR_acc + secrecy_rate(R_b, R_e);
-
             bp_acc = bp_acc + abs(a_sweep' * w).^2;
         end
         SR_curves(b, be_idx) = SR_acc / numIter;
@@ -80,10 +66,8 @@ for b = 1:2
     end
 end
 
-% --- Visualisation -------------------------------------------------------
 fig = figure('Color', 'w', 'Position', [100 100 1100 760]);
 
-% Top-left: secrecy collapse vs beta
 subplot(2, 2, 1);
 plot(beta_values*100, SR_curves(1,:), '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
 plot(beta_values*100, SR_curves(2,:), '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
@@ -93,7 +77,6 @@ ylabel('Secrecy Rate (bits/s/Hz)');
 title('Secrecy collapse under pilot contamination');
 legend(bands(1).name, bands(2).name, 'Location', 'NorthEast');
 
-% Top-right: secrecy ratio (collapse rate) - useful contrast
 subplot(2, 2, 2);
 ratio = SR_curves ./ (SR_curves(:,1) + eps);
 plot(beta_values*100, ratio(1,:), '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
@@ -104,13 +87,13 @@ ylabel('Normalised Secrecy Rate');
 title('Relative collapse');
 legend(bands(1).name, bands(2).name, 'Location', 'NorthEast');
 
-% Bottom: beam patterns clean vs hijacked
 for b = 1:2
     subplot(2, 2, 2 + b);
     plot(angles, beam_clean(b,:)  - max(beam_clean(b,:)),  'b-',  'LineWidth', 1.7); hold on;
     plot(angles, beam_hijack(b,:) - max(beam_hijack(b,:)), 'r--', 'LineWidth', 2.0);
-    xline(theta_bob, 'g:', sprintf('Bob (%d^{\\circ})', theta_bob), 'LineWidth', 1.5);
-    xline(theta_eve, 'k:', sprintf('Eve (+%d^{\\circ})', theta_eve), 'LineWidth', 1.5);
+    mark_bob(theta_bob, sprintf('Bob (%d^{\\circ})', theta_bob), 'right');
+    mark_eve(theta_eve, sprintf('Eve (+%d^{\\circ})', theta_eve), 'left');
+    pls_axis_prefs(gca, 'refLabelV', 'top');
     grid on; box on;
     xlim([-90 90]); ylim([-40 5]);
     xlabel('Angle (deg)'); ylabel('Normalised gain (dB)');
@@ -118,6 +101,7 @@ for b = 1:2
     legend('Clean (\beta=0)', 'Hijacked (\beta=1)', 'Location', 'South');
 end
 
-sgtitle('Pilot contamination: 6 GHz vs 28 GHz');
+sgtitle(sprintf('Pilot contamination (3GPP CDL, received SNR = %d dB, d = %d m)', ...
+    SNR_rx_dB, dist));
 
 save_figure(fig, 'fig_pilot_contamination');
