@@ -1,18 +1,18 @@
 % =========================================================================
 % BASELINE: 6 GHz Massive MIMO vs 28 GHz Ultra-Massive MIMO with FSPL
-% -------------------------------------------------------------------------
-%   * sub-6 GHz : Nt = 32,  TR 38.901 CDL-A-like (rich NLOS)
-%   * mmWave   : Nt = 512, TR 38.901 CDL-D-like (strong LOS)
-%   * Received SNR swept at Bob after path loss
+% (Zaktualizowano do oficjalnego modelu nrCDLChannel z 5G Toolbox)
+% Poprawiono logikę Asymetrii Dystansu i Transmit SNR (Brak "Magicznej Ewy")
 % =========================================================================
 pls_startup();
 addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
 p = default_params();
 rng(p.rng_seed);
 
-dist       = 1;                          % link distance [m]
-SNR_rx_dB  = 40:2:80;                    % received SNR at Bob [dB]
-SNR_rx_lin = rx_snr_power('linear', SNR_rx_dB);
+% --- FIZYKA DYSTANSU I MOCY ---
+dist_b     = 50;                        % Bob jest na 50 m
+dist_e     = 40;                        % Ewa ukrywa się na 40 m (bliżej stacji!)
+SNR_tx_dB  = 60:2:130;                  % Oś X: Transmit SNR (Moc stacji bazowej)
+SNR_tx_lin = 10.^(SNR_tx_dB / 10);
 numIter    = 200;
 
 bands = struct( ...
@@ -21,82 +21,124 @@ bands = struct( ...
     'Nt',   {p.Nt_sub6, p.Nt_mmwave}, ...
     'cdl',  {p.cdl_sub6, p.cdl_mmwave});
 
+% Obliczamy tłumienia z wyprzedzeniem
 for b = 1:2
-    [bands(b).PL_lin, bands(b).PL_dB] = compute_fspl(dist, bands(b).fc);
+    [bands(b).PL_lin_b, bands(b).PL_dB_b] = compute_fspl(dist_b, bands(b).fc);
+    [bands(b).PL_lin_e, bands(b).PL_dB_e] = compute_fspl(dist_e, bands(b).fc);
     [~, bands(b).sv] = setup_ula(bands(b).Nt, bands(b).fc);
-    print_scenario_snr('title', sprintf('Baseline @ %s', bands(b).name), ...
-        'SNR_rx_dB', SNR_rx_dB(1), 'dist_m', dist, 'fc_Hz', bands(b).fc, ...
-        'actors', {'Bob', 'Eve'}, ...
-        'notes', sprintf('SNR sweep (received at Bob): %d:%d:%d dB', ...
-            SNR_rx_dB(1), SNR_rx_dB(2)-SNR_rx_dB(1), SNR_rx_dB(end)));
+    
+    % --- NOWY, POPRAWNY WYDRUK W KONSOLI ---
+    fprintf('\n--- Baseline @ %s ---\n', bands(b).name);
+    fprintf('  Transmit SNR sweep: %d:%d:%d dB\n', SNR_tx_dB(1), SNR_tx_dB(2)-SNR_tx_dB(1), SNR_tx_dB(end));
+    fprintf('  Bob (d = %g m, PL = %.2f dB)\n', dist_b, bands(b).PL_dB_b);
+    fprintf('  Eve (d = %g m, PL = %.2f dB)\n', dist_e, bands(b).PL_dB_e);
 end
-fprintf('mmWave path-loss penalty vs 6 GHz: %.2f dB\n', ...
-    bands(2).PL_dB - bands(1).PL_dB);
+fprintf('\nmmWave path-loss penalty vs 6 GHz (Bob): %.2f dB\n', ...
+    bands(2).PL_dB_b - bands(1).PL_dB_b);
 
-SecrecyCap = zeros(2, 2, length(SNR_rx_dB));    % bands x {MRT,ZF} x SNR
-
-theta_b = -30; theta_e = -40;
+SecrecyCap = zeros(2, 2, length(SNR_tx_dB));    % bands x {MRT,ZF} x SNR
+theta_b = -30; 
+theta_e = 30;
 
 for f_idx = 1:2
-    fc = bands(f_idx).fc;  Nt = bands(f_idx).Nt;
-    sv = bands(f_idx).sv;  L  = bands(f_idx).PL_lin;
-    cdl = bands(f_idx).cdl;
-
+    fc = bands(f_idx).fc;  
+    Nt = bands(f_idx).Nt;
+    cdl_tag = bands(f_idx).cdl;
+    
+    % Pobieramy wyliczone wczesniej fizyczne tlumienie przestrzenne
+    PL_b = bands(f_idx).PL_lin_b;
+    PL_e = bands(f_idx).PL_lin_e;
+    
+    % --- INICJALIZACJA KANAŁÓW 3GPP (5G Toolbox) ---
+    cdl_b = setup_matlab_cdl(Nt, fc, theta_b, cdl_tag);
+    cdl_e = setup_matlab_cdl(Nt, fc, theta_e, cdl_tag);
+    
     for it = 1:numIter
-        hb = channel_3gpp_ula(sv, fc, theta_b, cdl);
-        he = channel_3gpp_ula(sv, fc, theta_e, cdl);
-
-        w_mrt = hb / norm(hb);
-        P_null = eye(Nt) - (he * (he' / (he' * he)));
-        w_zf   = P_null * hb;
+        release(cdl_b);
+        release(cdl_e);
+        cdl_b.Seed = randi([0 2^31-1]);
+        cdl_e.Seed = randi([0 2^31-1]);
+        
+        [pg_b, ~] = cdl_b();
+        [pg_e, ~] = cdl_e();
+        
+        hb = squeeze(sum(pg_b, 2)); hb = hb(:);
+        he = squeeze(sum(pg_e, 2)); he = he(:);
+        
+        % TWORZYMY KANAŁY EFEKTYWNE (Zysk anten + Tłumienie w powietrzu)
+        % To tutaj zaszyta jest cała twarda fizyka dystansu (Near-Far effect)
+        hb_eff = sqrt((1/PL_b) * Nt) * (hb / norm(hb));
+        he_eff = sqrt((1/PL_e) * Nt) * (he / norm(he));
+        
+        % Prekodery wyliczane z kanału efektywnego
+        w_mrt = hb_eff / norm(hb_eff);
+        P_null = eye(Nt) - (he_eff * (he_eff' / (he_eff' * he_eff)));
+        w_zf   = P_null * hb_eff;
+        
         if norm(w_zf) > 1e-9
             w_zf = w_zf / norm(w_zf);
         else
             w_zf = zeros(Nt, 1);
         end
-
-        for s = 1:length(SNR_rx_lin)
-            P_rx = SNR_rx_lin(s);   % received signal power scale at Bob
-
-            R_b = log2(1 + P_rx * abs(hb' * w_mrt)^2);
-            R_e = log2(1 + P_rx * abs(he' * w_mrt)^2);
+        
+        % OBLICZENIA POJEMNOŚCI
+        for s = 1:length(SNR_tx_lin)
+            P_tx = SNR_tx_lin(s); % Stacja bazowa wypuszcza P_tx z anteny
+            
+            % Tłumienie trasy zjada sygnał naturalnie dzięki wektorom hb_eff/he_eff
+            R_b = log2(1 + P_tx * abs(hb_eff' * w_mrt)^2);
+            R_e = log2(1 + P_tx * abs(he_eff' * w_mrt)^2);
             SecrecyCap(f_idx,1,s) = SecrecyCap(f_idx,1,s) + max(0, R_b - R_e);
-
-            R_b = log2(1 + P_rx * abs(hb' * w_zf)^2);
-            R_e = log2(1 + P_rx * abs(he' * w_zf)^2);
+            
+            R_b = log2(1 + P_tx * abs(hb_eff' * w_zf)^2);
+            R_e = log2(1 + P_tx * abs(he_eff' * w_zf)^2);
             SecrecyCap(f_idx,2,s) = SecrecyCap(f_idx,2,s) + max(0, R_b - R_e);
         end
     end
 end
 SecrecyCap = SecrecyCap / numIter;
 
-snap_theta_b = -30; snap_theta_e = 20;
+% --- TWORZENIE WYKRESÓW I ZDJĘCIE SYTUACYJNE (SNAPSHOT) ---
+snap_theta_b = theta_b; snap_theta_e = theta_e;
 angles = -90:0.05:90;
 fig = figure('Color', 'w', 'Position', [100 100 1100 800]);
 
 for f_idx = 1:2
     fc = bands(f_idx).fc; Nt = bands(f_idx).Nt; sv = bands(f_idx).sv;
-    cdl = bands(f_idx).cdl;
-    bandStr = [bands(f_idx).name, ' (CDL, PL included)'];
-
-    hb_s = channel_3gpp_ula(sv, fc, snap_theta_b, cdl);
-    he_s = channel_3gpp_ula(sv, fc, snap_theta_e, cdl);
+    cdl_tag = bands(f_idx).cdl;
+    bandStr = [bands(f_idx).name, ' (nrCDLChannel)'];
+    
+    cdl_b_s = setup_matlab_cdl(Nt, fc, snap_theta_b, cdl_tag);
+    cdl_e_s = setup_matlab_cdl(Nt, fc, snap_theta_e, cdl_tag);
+    cdl_b_s.Seed = 101;
+    cdl_e_s.Seed = 101; 
+    
+    [pg_b_s, ~] = cdl_b_s();
+    [pg_e_s, ~] = cdl_e_s();
+    
+    hb_s = squeeze(sum(pg_b_s, 2)); hb_s = hb_s(:); 
+    he_s = squeeze(sum(pg_e_s, 2)); he_s = he_s(:); 
+    
+    % Do narysowania migawki wiązki interesują nas tylko kierunki, więc tu
+    % używamy zwykłej normalizacji, aby wykres kątowy był czysty i wyraźny.
     w_mrt_s = hb_s / norm(hb_s);
     P_null_s = eye(Nt) - (he_s * (he_s' / (he_s' * he_s)));
     w_zf_s = P_null_s * hb_s; w_zf_s = w_zf_s / norm(w_zf_s);
-
+    
     a_sweep = step(sv, fc, angles);
     pat_mrt = 10*log10(abs(w_mrt_s' * a_sweep).^2);
     pat_zf  = 10*log10(abs(w_zf_s'  * a_sweep).^2);
-
+    
     subplot(2, 2, f_idx);
-    plot(SNR_rx_dB, squeeze(SecrecyCap(f_idx,1,:)), 'b-o', 'LineWidth', 1.5); hold on;
-    plot(SNR_rx_dB, squeeze(SecrecyCap(f_idx,2,:)), 'r--s', 'LineWidth', 1.5);
+    plot(SNR_tx_dB, squeeze(SecrecyCap(f_idx,1,:)), 'b-o', 'LineWidth', 1.5); hold on;
+    plot(SNR_tx_dB, squeeze(SecrecyCap(f_idx,2,:)), 'r--s', 'LineWidth', 1.5);
     grid on; box on;
     title(['Secrecy: ', bandStr]);
-    xlabel('Received SNR at Bob (dB)'); ylabel('bits/s/Hz');
+    % Oś X jest teraz poprawnie podpisana jako moc stacji bazowej
+    xlabel('Transmit SNR at Base Station (dB)'); 
+    ylabel('bits/s/Hz');
     legend('MRT', 'ZF', 'Location', 'NorthWest');
-
+    
     subplot(2, 2, f_idx + 2);
     plot(angles, pat_mrt - max(pat_mrt), 'b',  'LineWidth', 1.7); hold on;
     plot(angles, pat_zf  - max(pat_zf),  'r--','LineWidth', 1.5);
@@ -108,6 +150,32 @@ for f_idx = 1:2
     xlabel('Angle (deg)'); ylabel('Gain (dB)');
     ylim([-40 5]);
 end
-sgtitle(sprintf('6G PLS baseline (3GPP CDL) at d = %g m', dist));
+sgtitle(sprintf('6G PLS Baseline (Bob = %gm, Eve = %gm)', dist_b, dist_e));
+save_figure(fig, 'fig_baseline_6GHz_vs_28GHz_nrCDL');
 
-save_figure(fig, 'fig_baseline_6GHz_vs_28GHz');
+% =========================================================================
+% FUNKCJA POMOCNICZA: Konfiguracja kanału nrCDLChannel
+% =========================================================================
+function cdl = setup_matlab_cdl(Nt, fc, theta, band_tag)
+    cdl = nrCDLChannel;
+    
+    cdl.DelayProfile = 'CDL-A';
+    
+    if fc < 10e9  
+        cdl.DelaySpread = 30e-9;  
+    else          
+        cdl.DelaySpread = 10e-9;  
+    end
+    
+    cdl.CarrierFrequency = fc;
+    cdl.MaximumDopplerShift = 0;         
+    
+    cdl.TransmitAntennaArray.Size = [1 Nt 1 1 1]; 
+    cdl.TransmitAntennaArray.ElementSpacing = [0.5 0.5 1 1]; 
+    
+    cdl.TransmitArrayOrientation = [-theta; 0; 0];
+    cdl.ReceiveAntennaArray.Size = [1 1 1 1 1];
+    
+    cdl.NumTimeSamples = 1;
+    cdl.ChannelFiltering = false; 
+end

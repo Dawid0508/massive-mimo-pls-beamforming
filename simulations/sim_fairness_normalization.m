@@ -1,113 +1,203 @@
 % =========================================================================
 % SCENARIO: Vector vs Matrix ZF normalization - Sum-Rate vs Fairness
-% -------------------------------------------------------------------------
-% Matrix: ||W||_F^2 = P_rx  (more power to weak ZF columns)
-% Vector: ||W(:,k)||^2 = P_rx/K  (equal power per stream)
-%
-% Per-user gain spread is applied so the two constraints do not collapse
-% to the same precoder under symmetric i.i.d. Rayleigh channels.
+% Oparty na modelu 3GPP nrCDLChannel i fizycznym Path Loss (FSPL)
 % =========================================================================
 pls_startup();
 addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
 p = default_params();
 rng(p.rng_seed);
 
-Nt          = 64;
-K_fixed     = 8;
-SNR_fixed   = 20;
-SNR_rx_vec  = 0:5:30;
-K_vec       = 2:2:16;
-gain_spread_dB = 12;              % total spread across users [dB]
-numIter     = 200;
-noise_var   = p.noise_var;
+% --- PARAMETRY SYSTEMU ---
+Nt          = 32;                 
+fc          = p.fc_sub6;          
+K_fixed     = 8;                  
+SNR_fixed   = 80;                 % Dostosowano do fizycznego FSPL (bezwzględnego)
+SNR_tx_vec  = 60:5:120;           % Oś X: Transmit SNR (Moc stacji bazowej w dB)
+K_vec       = 2:2:16;             
+numIter     = 50;                 
 
-print_scenario_snr('title', 'Fairness / ZF normalization', ...
-    'SNR_rx_dB', SNR_fixed, ...
-    'actors', {sprintf('Bob (K=%d)', K_fixed), 'Eve'}, ...
-    'notes', sprintf('SNR sweep %d:%d:%d dB; K sweep %d:%d:%d', ...
-        SNR_rx_vec(1), SNR_rx_vec(2)-SNR_rx_vec(1), SNR_rx_vec(end), ...
-        K_vec(1), K_vec(2)-K_vec(1), K_vec(end)));
+max_K = max(K_vec);
+dist_b_all  = linspace(20, 150, max_K);
+theta_b_all = linspace(-60, 60, max_K);
+dist_e  = 40;
+theta_e = 30;
 
-SR_vs_SNR   = zeros(2, length(SNR_rx_vec));
-J_vs_SNR    = zeros(2, length(SNR_rx_vec));
-SR_vs_K     = zeros(2, length(K_vec));
-J_vs_K      = zeros(2, length(K_vec));
+fprintf('Inicjalizacja %d obiektów nrCDLChannel...\n', max_K + 1);
+cdl_b = cell(max_K, 1);
+for k = 1:max_K
+    cdl_b{k} = setup_matlab_cdl(Nt, fc, theta_b_all(k), 'CDL-A');
+end
+cdl_e = setup_matlab_cdl(Nt, fc, theta_e, 'CDL-A');
 
-for s_idx = 1:length(SNR_rx_vec)
-    P_rx = rx_snr_power('linear', SNR_rx_vec(s_idx));
-    [SR_vs_SNR(:, s_idx), J_vs_SNR(:, s_idx)] = ...
-        run_sweep_point(Nt, K_fixed, P_rx, noise_var, numIter, gain_spread_dB, p.eve_attn_dB);
+SR_vs_SNR = zeros(2, length(SNR_tx_vec));
+J_vs_SNR  = zeros(2, length(SNR_tx_vec));
+SR_vs_K   = zeros(2, length(K_vec));
+J_vs_K    = zeros(2, length(K_vec));
+
+fprintf('Rozpoczynam sweep Transmit SNR dla K = %d...\n', K_fixed);
+for s_idx = 1:length(SNR_tx_vec)
+    P_tx_lin = 10^(SNR_tx_vec(s_idx) / 10);
+    [SR_vs_SNR(:, s_idx), J_vs_SNR(:, s_idx)] = run_cdl_sweep( ...
+        cdl_b, cdl_e, dist_b_all, dist_e, fc, Nt, K_fixed, P_tx_lin, numIter);
 end
 
-P_rx_fixed = rx_snr_power('linear', SNR_fixed);
+P_tx_fixed_lin = 10^(SNR_fixed / 10);
+fprintf('Rozpoczynam sweep K dla Transmit SNR = %d dB...\n', SNR_fixed);
 for k_idx = 1:length(K_vec)
-    [SR_vs_K(:, k_idx), J_vs_K(:, k_idx)] = ...
-        run_sweep_point(Nt, K_vec(k_idx), P_rx_fixed, noise_var, numIter, gain_spread_dB, p.eve_attn_dB);
+    K_current = K_vec(k_idx);
+    [SR_vs_K(:, k_idx), J_vs_K(:, k_idx)] = run_cdl_sweep( ...
+        cdl_b, cdl_e, dist_b_all, dist_e, fc, Nt, K_current, P_tx_fixed_lin, numIter);
 end
 
+% --- WIZUALIZACJA ---
 fig = figure('Color', 'w', 'Position', [100 100 1200 760]);
 
 subplot(2, 2, 1);
-plot(SNR_rx_vec, SR_vs_SNR(1,:), '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
-plot(SNR_rx_vec, SR_vs_SNR(2,:), '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
+plot(SNR_tx_vec, SR_vs_SNR(1,:), '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
+plot(SNR_tx_vec, SR_vs_SNR(2,:), '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
 grid on; box on;
-xlabel('Received SNR (dB, norm. Rayleigh)'); ylabel('Secrecy Sum-Rate (bits/s/Hz)');
-title(sprintf('Sum-Rate vs SNR  (K = %d)', K_fixed));
-legend('Matrix (Frobenius)', 'Vector (per-user)', 'Location', 'SouthEast');
+xlabel('Transmit SNR at Base Station (dB)'); ylabel('Secrecy Sum-Rate (bits/s/Hz)');
+title(sprintf('Sum-Rate vs SNR (K = %d)', K_fixed));
+legend('Matrix (Frobenius)', 'Vector (per-user)', 'Location', 'NorthWest');
 
 subplot(2, 2, 2);
-plot(SNR_rx_vec, J_vs_SNR(1,:), '--bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
-plot(SNR_rx_vec, J_vs_SNR(2,:), '--rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
+plot(SNR_tx_vec, J_vs_SNR(1,:), '--bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
+plot(SNR_tx_vec, J_vs_SNR(2,:), '--rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
 grid on; box on; ylim([0 1.05]);
-xlabel('Received SNR (dB, norm. Rayleigh)'); ylabel("Jain's index (Bob rates)");
-title(sprintf('Fairness vs SNR  (K = %d)', K_fixed));
+xlabel('Transmit SNR at Base Station (dB)'); ylabel("Jain's index (Fairness)");
+title(sprintf('Fairness vs SNR (K = %d)', K_fixed));
 legend('Matrix (Frobenius)', 'Vector (per-user)', 'Location', 'SouthWest');
 
 subplot(2, 2, 3);
 plot(K_vec, SR_vs_K(1,:), '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
 plot(K_vec, SR_vs_K(2,:), '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
 grid on; box on;
-xlabel('Number of users K'); ylabel('Secrecy Sum-Rate (bits/s/Hz)');
-title(sprintf('Sum-Rate vs K  (SNR = %d dB)', SNR_fixed));
-legend('Matrix (Frobenius)', 'Vector (per-user)', 'Location', 'SouthEast');
+xlabel('Number of users (K)'); ylabel('Secrecy Sum-Rate (bits/s/Hz)');
+title(sprintf('Sum-Rate vs K (Transmit SNR = %d dB)', SNR_fixed));
+legend('Matrix (Frobenius)', 'Vector (per-user)', 'Location', 'SouthWest');
 
 subplot(2, 2, 4);
 plot(K_vec, J_vs_K(1,:), '--bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
 plot(K_vec, J_vs_K(2,:), '--rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
 grid on; box on; ylim([0 1.05]);
-xlabel('Number of users K'); ylabel("Jain's index (Bob rates)");
-title(sprintf('Fairness vs K  (SNR = %d dB)', SNR_fixed));
+xlabel('Number of users (K)'); ylabel("Jain's index (Fairness)");
+title(sprintf('Fairness vs K (Transmit SNR = %d dB)', SNR_fixed));
 legend('Matrix (Frobenius)', 'Vector (per-user)', 'Location', 'SouthWest');
 
-sgtitle(sprintf(['ZF normalization trade-off  (Nt = %d, user gain spread = %d dB)'], ...
-    Nt, gain_spread_dB));
+sgtitle(sprintf('ZF Normalization Trade-off: 6 GHz CDL-A (Nt = %d, Physical FSPL Near-Far Effect)', Nt));
+save_figure(fig, 'fig_fairness_normalization_cdl');
 
-save_figure(fig, 'fig_fairness_normalization');
-
-
-function [SR, J] = run_sweep_point(Nt, K, P_rx, noise_var, numIter, gain_spread_dB, eve_attn_dB)
+% =========================================================================
+% FUNKCJA WYKONAWCZA SWEEPÓW
+% =========================================================================
+function [SR_out, J_out] = run_cdl_sweep(cdl_b, cdl_e, dist_b, dist_e, fc, Nt, K, P_tx, numIter)
     SR_acc = zeros(2, 1);
     J_acc  = zeros(2, 1);
-
+    
     for it = 1:numIter
-        H = (randn(Nt, K) + 1j*randn(Nt, K)) / sqrt(2);
-        H = apply_user_gain_spread(H, gain_spread_dB);
-        h_eve = (randn(Nt, 1) + 1j*randn(Nt, 1)) / sqrt(2);
-        h_eve = attenuate_eve_channel(h_eve, eve_attn_dB);
-
-        W_raw = H / (H' * H);
-
-        W_mat = zf_precoder_normalize(W_raw, P_rx, 'matrix');
-        W_vec = zf_precoder_normalize(W_raw, P_rx, 'vector');
-
-        [sr_m, j_m] = compute_zf_secrecy_metrics(H, h_eve, W_mat, noise_var);
-        [sr_v, j_v] = compute_zf_secrecy_metrics(H, h_eve, W_vec, noise_var);
+        H_eff = zeros(Nt, K);
+        
+        % Kanały użytkowników (Bobowie)
+        for k = 1:K
+            release(cdl_b{k});
+            cdl_b{k}.Seed = randi([0 2^31-1]);
+            [pg_b, ~] = cdl_b{k}();
+            h_b = squeeze(sum(pg_b, 2)); h_b = h_b(:);
+            
+            % NOWE: Wyliczanie fizycznego tłumienia przestrzennego dla każdego Boba
+            [PL_lin_b, ~] = compute_fspl(dist_b(k), fc);
+            
+            % Kanał efektywny z twardą fizyką tłumienia amplitudy sygnału
+            H_eff(:, k) = sqrt((1 / PL_lin_b) * Nt) * (h_b / norm(h_b));
+        end
+        
+        % Kanał podsłuchiwacza (Ewa)
+        release(cdl_e);
+        cdl_e.Seed = randi([0 2^31-1]);
+        [pg_e, ~] = cdl_e();
+        h_e = squeeze(sum(pg_e, 2)); h_e = h_e(:);
+        
+        % NOWE: Wyliczanie fizycznego tłumienia przestrzennego dla Ewy
+        [PL_lin_e, ~] = compute_fspl(dist_e, fc);
+        h_e_eff = sqrt((1 / PL_lin_e) * Nt) * (h_e / norm(h_e));
+        
+        % Obliczanie surowego prekodera pseudoodwrotności (ZF)
+        W_raw = H_eff * pinv(H_eff' * H_eff);
+        
+        % 1. Normalizacja Macierzowa (Frobeniusa)
+        W_mat = W_raw / norm(W_raw, 'fro');
+        
+        % 2. Normalizacja Wektorowa (per-user)
+        W_vec = zeros(Nt, K);
+        for k = 1:K
+            if norm(W_raw(:, k)) > 1e-9
+                W_vec(:, k) = W_raw(:, k) / norm(W_raw(:, k)) * sqrt(1/K);
+            end
+        end
+        
+        % Ewaluacja metryk PLS
+        [sr_m, j_m] = compute_pls_metrics(H_eff, h_e_eff, W_mat, P_tx, K);
+        [sr_v, j_v] = compute_pls_metrics(H_eff, h_e_eff, W_vec, P_tx, K);
+        
         SR_acc(1) = SR_acc(1) + sr_m;
         SR_acc(2) = SR_acc(2) + sr_v;
         J_acc(1)  = J_acc(1)  + j_m;
         J_acc(2)  = J_acc(2)  + j_v;
     end
+    
+    SR_out = SR_acc / numIter;
+    J_out  = J_acc  / numIter;
+end
 
-    SR = SR_acc / numIter;
-    J  = J_acc  / numIter;
+% =========================================================================
+% FUNKCJA POMOCNICZA: Metryki Sum-Rate oraz Jain's Fairness Index
+% =========================================================================
+function [sum_secrecy, jains_index] = compute_pls_metrics(H_eff, h_e_eff, W, P_tx, K)
+    R_b = zeros(1, K);
+    R_e = zeros(1, K);
+    
+    for k = 1:K
+        S_b = P_tx * abs(H_eff(:, k)' * W(:, k))^2;
+        I_b = 0;
+        for j = 1:K
+            if j ~= k
+                I_b = I_b + P_tx * abs(H_eff(:, k)' * W(:, j))^2;
+            end
+        end
+        R_b(k) = log2(1 + S_b / (I_b + 1)); % Szum tła znormalizowany do 1
+        
+        S_e = P_tx * abs(h_e_eff' * W(:, k))^2;
+        I_e = 0;
+        for j = 1:K
+            if j ~= k
+                I_e = I_e + P_tx * abs(h_e_eff' * W(:, j))^2;
+            end
+        end
+        R_e(k) = log2(1 + S_e / (I_e + 1));
+    end
+    
+    sum_secrecy = sum(max(0, R_b - R_e));
+    
+    if sum(R_b.^2) == 0
+        jains_index = 0;
+    else
+        jains_index = (sum(R_b))^2 / (K * sum(R_b.^2));
+    end
+end
+
+% =========================================================================
+% FUNKCJA POMOCNICZA: Konfiguracja kanału nrCDLChannel
+% =========================================================================
+function cdl = setup_matlab_cdl(Nt, fc, theta, band_tag)
+    cdl = nrCDLChannel;
+    cdl.DelayProfile = 'CDL-A';      
+    cdl.DelaySpread = 30e-9; 
+    cdl.CarrierFrequency = fc;
+    cdl.MaximumDopplerShift = 0;         
+    cdl.TransmitAntennaArray.Size = [1 Nt 1 1 1]; 
+    cdl.TransmitAntennaArray.ElementSpacing = [0.5 0.5 1 1]; 
+    cdl.TransmitArrayOrientation = [-theta; 0; 0];
+    cdl.ReceiveAntennaArray.Size = [1 1 1 1 1];
+    cdl.NumTimeSamples = 1;
+    cdl.ChannelFiltering = false; 
 end
