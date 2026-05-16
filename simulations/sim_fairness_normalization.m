@@ -1,6 +1,7 @@
 % =========================================================================
 % SCENARIO: Vector vs Matrix ZF normalization - Sum-Rate vs Fairness
 % Oparty na modelu 3GPP nrCDLChannel i fizycznym Path Loss (FSPL)
+% ZAWARTY FIX: Dynamiczny i prawidłowy rozkład przestrzenny dla każdego K!
 % =========================================================================
 pls_startup();
 addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
@@ -16,17 +17,10 @@ SNR_tx_vec  = 60:5:120;           % Oś X: Transmit SNR (Moc stacji bazowej w dB
 K_vec       = 2:2:16;             
 numIter     = 50;                 
 
-max_K = max(K_vec);
-dist_b_all  = linspace(20, 150, max_K);
-theta_b_all = linspace(-60, 60, max_K);
 dist_e  = 40;
 theta_e = 30;
 
-fprintf('Inicjalizacja %d obiektów nrCDLChannel...\n', max_K + 1);
-cdl_b = cell(max_K, 1);
-for k = 1:max_K
-    cdl_b{k} = setup_matlab_cdl(Nt, fc, theta_b_all(k), 'CDL-A');
-end
+% Kanał podsłuchiwacza Ewy (jedna, stała pozycja)
 cdl_e = setup_matlab_cdl(Nt, fc, theta_e, 'CDL-A');
 
 SR_vs_SNR = zeros(2, length(SNR_tx_vec));
@@ -34,22 +28,51 @@ J_vs_SNR  = zeros(2, length(SNR_tx_vec));
 SR_vs_K   = zeros(2, length(K_vec));
 J_vs_K    = zeros(2, length(K_vec));
 
+% =========================================================================
+% --- 1. SWEEP TRANSMIT SNR (Dla stałego K = 8) ---
+% =========================================================================
 fprintf('Rozpoczynam sweep Transmit SNR dla K = %d...\n', K_fixed);
+
+% Generujemy dedykowaną geometrię, która idealnie pokrywa CAŁY sektor
+dist_snr_sweep  = linspace(20, 150, K_fixed);
+theta_snr_sweep = linspace(-60, 60, K_fixed);
+
+cdl_b_snr = cell(K_fixed, 1);
+for k = 1:K_fixed
+    cdl_b_snr{k} = setup_matlab_cdl(Nt, fc, theta_snr_sweep(k), 'CDL-A');
+end
+
 for s_idx = 1:length(SNR_tx_vec)
     P_tx_lin = 10^(SNR_tx_vec(s_idx) / 10);
     [SR_vs_SNR(:, s_idx), J_vs_SNR(:, s_idx)] = run_cdl_sweep( ...
-        cdl_b, cdl_e, dist_b_all, dist_e, fc, Nt, K_fixed, P_tx_lin, numIter);
+        cdl_b_snr, cdl_e, dist_snr_sweep, dist_e, fc, Nt, K_fixed, P_tx_lin, numIter);
 end
 
+% =========================================================================
+% --- 2. SWEEP K (Dla stałego Transmit SNR) ---
+% =========================================================================
 P_tx_fixed_lin = 10^(SNR_fixed / 10);
 fprintf('Rozpoczynam sweep K dla Transmit SNR = %d dB...\n', SNR_fixed);
+
 for k_idx = 1:length(K_vec)
     K_current = K_vec(k_idx);
+    
+    % KLUCZOWA POPRAWKA: Dynamiczne skalowanie siatki geometrycznej dla danego K!
+    dist_k_sweep  = linspace(20, 150, K_current);
+    theta_k_sweep = linspace(-60, 60, K_current);
+    
+    cdl_b_k = cell(K_current, 1);
+    for k = 1:K_current
+        cdl_b_k{k} = setup_matlab_cdl(Nt, fc, theta_k_sweep(k), 'CDL-A');
+    end
+    
     [SR_vs_K(:, k_idx), J_vs_K(:, k_idx)] = run_cdl_sweep( ...
-        cdl_b, cdl_e, dist_b_all, dist_e, fc, Nt, K_current, P_tx_fixed_lin, numIter);
+        cdl_b_k, cdl_e, dist_k_sweep, dist_e, fc, Nt, K_current, P_tx_fixed_lin, numIter);
 end
 
+% =========================================================================
 % --- WIZUALIZACJA ---
+% =========================================================================
 fig = figure('Color', 'w', 'Position', [100 100 1200 760]);
 
 subplot(2, 2, 1);
@@ -84,7 +107,7 @@ xlabel('Number of users (K)'); ylabel("Jain's index (Fairness)");
 title(sprintf('Fairness vs K (Transmit SNR = %d dB)', SNR_fixed));
 legend('Matrix (Frobenius)', 'Vector (per-user)', 'Location', 'SouthWest');
 
-sgtitle(sprintf('ZF Normalization Trade-off: 6 GHz CDL-A (Nt = %d, Physical FSPL Near-Far Effect)', Nt));
+sgtitle(sprintf('ZF Normalization Trade-off: 6 GHz CDL-A (Nt = %d, Full Sector Spread)', Nt));
 save_figure(fig, 'fig_fairness_normalization_cdl');
 
 % =========================================================================
@@ -104,7 +127,7 @@ function [SR_out, J_out] = run_cdl_sweep(cdl_b, cdl_e, dist_b, dist_e, fc, Nt, K
             [pg_b, ~] = cdl_b{k}();
             h_b = squeeze(sum(pg_b, 2)); h_b = h_b(:);
             
-            % NOWE: Wyliczanie fizycznego tłumienia przestrzennego dla każdego Boba
+            % Wyliczanie fizycznego tłumienia przestrzennego dla każdego Boba
             [PL_lin_b, ~] = compute_fspl(dist_b(k), fc);
             
             % Kanał efektywny z twardą fizyką tłumienia amplitudy sygnału
@@ -117,7 +140,7 @@ function [SR_out, J_out] = run_cdl_sweep(cdl_b, cdl_e, dist_b, dist_e, fc, Nt, K
         [pg_e, ~] = cdl_e();
         h_e = squeeze(sum(pg_e, 2)); h_e = h_e(:);
         
-        % NOWE: Wyliczanie fizycznego tłumienia przestrzennego dla Ewy
+        % Wyliczanie fizycznego tłumienia przestrzennego dla Ewy
         [PL_lin_e, ~] = compute_fspl(dist_e, fc);
         h_e_eff = sqrt((1 / PL_lin_e) * Nt) * (h_e / norm(h_e));
         
