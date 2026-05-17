@@ -9,8 +9,9 @@
 % becomes deterministic. Two PLS-relevant consequences:
 %   1) Outage probability of the legitimate user collapses, lower
 %      transmit-power margins are needed.
-%   2) Bob's rate variance shrinks but Eve's does not - this is what
-%      gives Massive MIMO its native PLS advantage.
+%   2) Bob's rate variance shrinks but Eve's does not (single-antenna
+%      Eve in this script) - this is what gives Massive MIMO its native
+%      PLS advantage.
 %
 % This script:
 %   - shows histograms of the normalised channel gain at small vs
@@ -23,39 +24,36 @@ addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
 p = default_params();
 rng(p.rng_seed);
 
-% --- Configuration -------------------------------------------------------
 Nt_vec       = [4 8 16 32 64 128 256 512];
-Nt_hist      = [4, 256];                 % values shown as histograms
-numIter      = 4000;                     % heavy MC for clean variance curves
+Nt_hist      = [4, 256];
+numIter      = 4000;   % higher MC count for stable Var(||h||^2/Nt) and Std(R_sec)
 SNR_rx_dB    = 20;
 P_rx         = rx_snr_power('linear', SNR_rx_dB);
 noise_var    = p.noise_var;
 
 print_scenario_snr('title', 'Channel hardening', ...
-    'SNR_rx_dB', SNR_rx_dB, 'actors', {'Bob', 'Eve'});
+    'SNR_rx_dB', SNR_rx_dB, ...
+    'notes', 'Abstract i.i.d. Rayleigh; Eve single-antenna with eve_attn_dB');
 
-var_norm_h   = zeros(size(Nt_vec));      % Var(||h||^2 / Nt)
+var_norm_h   = zeros(size(Nt_vec));
 mean_norm_h  = zeros(size(Nt_vec));
-std_R_sec    = zeros(size(Nt_vec));      % Std(R_secrecy) under MRT
+std_R_sec    = zeros(size(Nt_vec));
 mean_R_sec   = zeros(size(Nt_vec));
-
 hist_data    = cell(length(Nt_hist), 1);
 
-% --- Sweep ---------------------------------------------------------------
 for n_idx = 1:length(Nt_vec)
     Nt = Nt_vec(n_idx);
     g_samples = zeros(numIter, 1);
     R_samples = zeros(numIter, 1);
     for it = 1:numIter
         h_b = (randn(Nt,1) + 1j*randn(Nt,1)) / sqrt(2);
-        h_e = (randn(Nt,1) + 1j*randn(Nt,1)) / sqrt(2);
+        h_e = attenuate_eve_channel((randn(1,1) + 1j*randn(1,1)) / sqrt(2));
 
-        g_samples(it) = (h_b' * h_b) / Nt;          % normalised gain
+        g_samples(it) = (h_b' * h_b) / Nt;
 
-        % MRT towards Bob (single-user illustrative case)
         w   = h_b / norm(h_b);
         R_b = log2(1 + P_rx * abs(h_b' * w)^2 / noise_var);
-        R_e = log2(1 + P_rx * abs(h_e' * w)^2 / noise_var);
+        R_e = log2(1 + P_rx * abs(h_e)^2 / noise_var);
         R_samples(it) = secrecy_rate(R_b, R_e);
     end
     mean_norm_h(n_idx) = mean(g_samples);
@@ -69,13 +67,11 @@ for n_idx = 1:length(Nt_vec)
     end
 end
 
-% Theoretical reference: Var = 1/Nt
 var_theory = 1 ./ Nt_vec;
+c = pls_colors();
 
-% --- Visualisation -------------------------------------------------------
-fig = figure('Color', 'w', 'Position', [100 100 1200 760]);
+fig = figure('Color', c.bg, 'Position', [100 100 1200 760]);
 
-% Top-left: hardening histograms
 subplot(2, 2, 1);
 colors = lines(length(Nt_hist));
 edges  = 0:0.05:3.5;
@@ -84,7 +80,6 @@ for i = 1:length(Nt_hist)
         'FaceColor', colors(i,:), 'FaceAlpha', 0.55, ...
         'DisplayName', sprintf('Nt = %d', Nt_hist(i))); hold on;
 end
-c = pls_colors();
 xline(1, '--', 'E[||h||^2/N_t] = 1', 'Color', c.ref, 'LineWidth', 1.2);
 pls_axis_prefs(gca, 'refLabelV', 'top');
 grid on; box on;
@@ -93,10 +88,9 @@ title('Channel hardening: distribution of normalised gain');
 legend(arrayfun(@(n) sprintf('N_t = %d', n), Nt_hist, 'UniformOutput', false), ...
     'Location', 'NorthEast');
 
-% Top-right: Var(||h||^2/Nt) vs Nt with theory line
 subplot(2, 2, 2);
-loglog(Nt_vec, var_norm_h, '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b', ...
-    'DisplayName', 'Monte-Carlo'); hold on;
+loglog(Nt_vec, var_norm_h, '-o', 'LineWidth', 2, 'Color', c.sub6, ...
+    'MarkerFaceColor', c.sub6, 'DisplayName', 'Monte-Carlo'); hold on;
 loglog(Nt_vec, var_theory, '--', 'Color', c.ref, 'LineWidth', 1.5, ...
     'DisplayName', 'Theory 1/N_t');
 grid on; box on;
@@ -104,16 +98,16 @@ xlabel('Number of antennas N_t'); ylabel('Var(||h||^2 / N_t)');
 title('Hardening rate: Var \propto 1/N_t');
 legend('Monte-Carlo', 'Theory: 1/N_t', 'Location', 'NorthEast');
 
-% Bottom-left: mean Secrecy Rate vs Nt
 subplot(2, 2, 3);
-semilogx(Nt_vec, mean_R_sec, '-go', 'LineWidth', 2, 'MarkerFaceColor', 'g');
+semilogx(Nt_vec, mean_R_sec, '-o', 'LineWidth', 2, 'Color', c.bob, ...
+    'MarkerFaceColor', c.bob);
 grid on; box on;
 xlabel('Number of antennas N_t'); ylabel('E[R_{sec}] (bits/s/Hz)');
 title(sprintf('Mean Secrecy Rate vs N_t  (received SNR = %d dB)', SNR_rx_dB));
 
-% Bottom-right: std of Secrecy Rate vs Nt - operational hardening
 subplot(2, 2, 4);
-semilogx(Nt_vec, std_R_sec, '-mo', 'LineWidth', 2, 'MarkerFaceColor', 'm');
+semilogx(Nt_vec, std_R_sec, '-o', 'LineWidth', 2, 'Color', c.eve, ...
+    'MarkerFaceColor', c.eve);
 grid on; box on;
 xlabel('Number of antennas N_t'); ylabel('Std(R_{sec}) (bits/s/Hz)');
 title('Outage sensitivity collapses with N_t');
