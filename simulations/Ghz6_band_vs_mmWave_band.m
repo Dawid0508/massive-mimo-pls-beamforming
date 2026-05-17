@@ -38,7 +38,7 @@ fprintf('\nmmWave path-loss penalty vs 6 GHz (Bob): %.2f dB\n', ...
 
 SecrecyCap = zeros(2, 2, length(SNR_tx_dB));    % bands x {MRT,ZF} x SNR
 theta_b = -30; 
-theta_e = 30;
+theta_e = -40;
 
 for f_idx = 1:2
     fc = bands(f_idx).fc;  
@@ -151,7 +151,8 @@ for f_idx = 1:2
     ylim([-40 5]);
 end
 sgtitle(sprintf('6G PLS Baseline (Bob = %gm, Eve = %gm)', dist_b, dist_e));
-save_figure(fig, 'fig_baseline_6GHz_vs_28GHz_nrCDL');
+save_figure(fig, 'fig_baseline_6GHz_vs_28GHz');
+plot_topology(dist_b, theta_b, dist_e, theta_e);
 
 % =========================================================================
 % FUNKCJA POMOCNICZA: Konfiguracja kanału nrCDLChannel
@@ -178,4 +179,50 @@ function cdl = setup_matlab_cdl(Nt, fc, theta, band_tag)
     
     cdl.NumTimeSamples = 1;
     cdl.ChannelFiltering = false; 
+end
+
+% =========================================================================
+% FUNKCJA POMOCNICZA: Generowanie topologii scenariusza
+% =========================================================================
+function plot_topology(dist_b, theta_b, dist_e, theta_e)
+    fig_top = figure('Color', 'w', 'Position', [150 150 600 600]);
+    
+    % Przeliczenie współrzędnych biegunowych na kartezjańskie
+    % Zakładamy, że stacja bazowa (BS) jest w punkcie (0,0)
+    % Zgodnie z osią broadside ULA (0 stopni na osi Y, kąty rosną względem niej)
+    x_bs = 0; y_bs = 0;
+    x_b = dist_b * sind(theta_b); y_b = dist_b * cosd(theta_b);
+    x_e = dist_e * sind(theta_e); y_e = dist_e * cosd(theta_e);
+    
+    hold on; grid on; box on;
+    
+    % Okręgi dystansu (promienie dla Boba i Ewy)
+    t = linspace(0, 2*pi, 100);
+    plot(dist_b * sin(t), dist_b * cos(t), 'b:', 'LineWidth', 1, 'HandleVisibility', 'off');
+    plot(dist_e * sin(t), dist_e * cos(t), 'r:', 'LineWidth', 1, 'HandleVisibility', 'off');
+    
+    % Linie kierunkowe (LOS path)
+    plot([x_bs, x_b], [y_bs, y_b], 'b-', 'LineWidth', 1.5, 'HandleVisibility', 'off');
+    plot([x_bs, x_e], [y_bs, y_e], 'r--', 'LineWidth', 1.5, 'HandleVisibility', 'off');
+    
+    % Rysowanie punktów
+    plot(x_bs, y_bs, 'k^', 'MarkerSize', 12, 'MarkerFaceColor', 'k', 'DisplayName', 'Base Station (BS)');
+    plot(x_b, y_b, 'bo', 'MarkerSize', 10, 'MarkerFaceColor', 'b', 'DisplayName', 'Bob');
+    plot(x_e, y_e, 'rs', 'MarkerSize', 10, 'MarkerFaceColor', 'r', 'DisplayName', 'Eve');
+    
+    % Dodanie etykiet tekstowych
+    text(x_b + 2, y_b, sprintf('Bob\n(%gm, %g\\circ)', dist_b, theta_b), 'Color', 'b', 'FontSize', 10);
+    text(x_e + 2, y_e, sprintf('Eve\n(%gm, %g\\circ)', dist_e, theta_e), 'Color', 'r', 'FontSize', 10);
+    text(x_bs, y_bs - 3, 'BS (0,0)', 'HorizontalAlignment', 'center', 'FontSize', 10, 'Color', 'k');
+    
+    % Formatowanie osi układu
+    axis equal;
+    max_d = max(dist_b, dist_e) + 15;
+    xlim([-max_d, max_d]);
+    ylim([-max_d/2, max_d]); % Dopasowane do widoku "z przodu" anteny
+    xlabel('X [m] (Szerokość)'); ylabel('Y [m] (Dystans w kierunku broadside)');
+    title('Scenariusz PLS: Topologia sieci (Widok z góry)');
+    legend('Location', 'NorthEast');
+
+    save_figure(fig_top, '../topology/topology_baseline');
 end
