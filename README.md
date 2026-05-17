@@ -52,10 +52,10 @@ list_project_requirements
 
 | File | Purpose |
 |------|---------|
-| `default_params.m` | Project-wide parameters (carriers, antennas, SNR, RNG seed) |
+| `default_params.m` | Project-wide parameters (carriers, antennas, RNG seed) |
 | `setup_ula.m` | Half-wavelength ULA + `phased.SteeringVector` |
-| `channel_3gpp_ula.m` | TR 38.901-inspired CDL-A / CDL-D on ULA |
-| `assert_requirements.m` | Fail fast if MATLAB or Phased Array Toolbox is missing |
+| `compute_fspl.m` | Free-space path loss for link budget |
+| `assert_requirements.m` | Fail fast if MATLAB, Phased Array, or 5G Toolbox is missing |
 | `list_project_requirements.m` | Print dependency audit |
 | `secrecy_rate.m` | `max(0, R_bob - R_eve)` (Wyner) |
 | `apply_plot_style.m` | Dark theme, line colors, legend + reference-line labels |
@@ -103,8 +103,9 @@ All scripts use `default_params.rng_seed = 2026` for reproducibility.
 
 ## Conventions
 
-- **SNR:** `SNR_rx_dB` is received SNR at Bob (`rx_snr_power`). `print_scenario_snr` logs TX/RX per actor when `dist_m` / `fc_Hz` are set. Abstract Rayleigh scripts use normalized channels (no FSPL in H).
-- **3GPP channels:** `channel_3gpp_ula` — CDL-A-like @ 6 GHz, CDL-D-like @ 28 GHz (cluster + ULA steering; not a full 3GPP stack).
+- **SNR:** Scenarios use **transmit SNR** `SNR_tx_dB` with `P_tx = 10^(SNR_tx_dB/10)` and `noise_var = 1`. Path loss via `compute_fspl(dist, fc)`. Effective channel (typical): `h_eff = sqrt((1/PL)*Nt) * (h/norm(h))`. Exception: `sim_channel_hardening` uses `h_eff = sqrt(1/PL)*h_raw`.
+- **Channels:** `nrCDLChannel` (5G Toolbox), CDL-A profile, ULA steering via `TransmitArrayOrientation`. Not a full 3GPP stack simulator.
+- **Logging:** `fprintf` link budget per scenario (distance, FSPL, `SNR_tx`). Legacy helpers `print_scenario_snr` / `SNR_rx_dB` in `default_params` are unused by current scripts.
 - **Noise:** `noise_var = 1` (linear) unless overridden.
 - **Secrecy rate:** `max(0, R_b - R_e)` per user; sum where noted.
 - **Plots:** Dark background (`#1a1a2e`), light axes; Bob green, Eve salmon. `results/run_all.log` is git-ignored; PNGs are committed.

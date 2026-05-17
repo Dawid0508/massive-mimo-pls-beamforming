@@ -3,12 +3,14 @@ function assert_requirements(toolbox_id)
 %
 %   assert_requirements()  — check everything this project needs
 %   assert_requirements('Phased_Array_System_Toolbox')
+%   assert_requirements('5G_Toolbox')
 %
 %   See also: list_project_requirements
 
     if nargin < 1
         assert_matlab_version();
         assert_requirements('Phased_Array_System_Toolbox');
+        assert_requirements('5G_Toolbox');
         return;
     end
 
@@ -19,6 +21,9 @@ function assert_requirements(toolbox_id)
             if ok
                 ok = exist('phased.ULA', 'class') == 8 && exist('physconst', 'file') == 2;
             end
+        case '5G_Toolbox'
+            name = '5G Toolbox';
+            ok = ~isempty(ver('5g')) && exist('nrCDLChannel', 'file') >= 2;
         otherwise
             error('assert_requirements:unknown', 'Unknown toolbox id: %s', toolbox_id);
     end
