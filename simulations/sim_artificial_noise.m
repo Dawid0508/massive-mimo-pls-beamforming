@@ -97,7 +97,8 @@ title(sprintf('Power-allocation trade-off  (L = %d Eves)', L_fixed));
 xline(phi_fixed, 'k:', sprintf('\\phi = %.1f', phi_fixed), 'LineWidth', 1.5, 'LabelVerticalAlignment', 'bottom');
 
 sgtitle(sprintf('Artificial Noise @ 6 GHz: Targeted Proximity Attack (Nt = %d, SNR_{tx} = %d dB)', Nt, SNR_tx_dB));
-save_figure(fig, 'fig_artificial_noise_tradeoffs');
+save_figure(fig, 'fig_artificial_noise');
+plot_an_topology(dist, K, 8)
 
 % =========================================================================
 % FUNKCJA WYKONAWCZA: Generuje kanały i wylicza pojemność dla jednej iteracji
@@ -199,4 +200,69 @@ function cdl = setup_matlab_cdl(cdl, Nt, fc, theta)
     cdl.ReceiveAntennaArray.Size = [1 1 1 1 1];
     cdl.NumTimeSamples = 1;
     cdl.ChannelFiltering = false; 
+end
+
+% =========================================================================
+% FUNKCJA POMOCNICZA: Generowanie topologii scenariusza (Targeted Proximity)
+% =========================================================================
+function plot_an_topology(dist, K, num_eve)
+    fig_top = figure('Color', 'w', 'Position', [150 150 700 700]);
+    hold on; grid on; box on;
+    
+    % --- Odtworzenie logiki rozmieszczenia ze skryptu ---
+    % Bobs są rozrzuceni w sektorze [-60, 60]
+    theta_bobs = -60 + 120 * rand(1, K);
+    
+    % Ewy celują w losowych Bobów i stoją bardzo blisko nich (+/- 6 stopni)
+    target_bob_idx = randi(K, 1, num_eve);
+    angular_error  = -6 + 12 * rand(1, num_eve);
+    theta_eves     = theta_bobs(target_bob_idx) + angular_error;
+    
+    % Konwersja na kartezjańskie (BS w 0,0)
+    x_bs = 0; y_bs = 0;
+    max_d = dist + 15;
+    
+    % Rysowanie BS
+    p_bs = plot(x_bs, y_bs, 'k^', 'MarkerSize', 12, 'MarkerFaceColor', 'k', 'DisplayName', 'Base Station (BS)');
+    text(x_bs, y_bs - 3, 'BS (0,0)', 'HorizontalAlignment', 'center', 'Color', 'k');
+    
+    % Rysowanie Ew (Targeted Proximity)
+    x_eves = dist * sind(theta_eves);
+    y_eves = dist * cosd(theta_eves);
+    
+    p_e = [];
+    for e = 1:num_eve
+        p_e = plot(x_eves(e), y_eves(e), 'rs', 'MarkerSize', 8, 'MarkerFaceColor', 'r');
+        text(x_eves(e) + 1.5, y_eves(e) + 1.5, sprintf('E_{%d}', e), 'Color', 'r', 'FontSize', 9);
+    end
+    if ~isempty(p_e)
+        set(p_e, 'DisplayName', sprintf('Eves (L=%d)', num_eve));
+    end
+    
+    % Rysowanie Bobów
+    p_b = [];
+    for k = 1:K
+        x_b = dist * sind(theta_bobs(k));
+        y_b = dist * cosd(theta_bobs(k));
+        p_b = plot(x_b, y_b, 'bo', 'MarkerSize', 8, 'MarkerFaceColor', 'b');
+        text(x_b - 1.5, y_b - 1.5, sprintf('B_{%d}', k), 'Color', 'b', 'FontSize', 9, 'HorizontalAlignment', 'right');
+    end
+    if ~isempty(p_b)
+        set(p_b, 'DisplayName', sprintf('Bobs (K=%d)', K));
+    end
+    
+    % Ustawienia osi
+    axis equal;
+    xlim([-max_d, max_d]);
+    ylim([-10, max_d]);
+    xlabel('X [m]'); ylabel('Y [m]');
+    title(sprintf('Scenario 4: Artificial Noise (K=%d, L=%d, d=%gm)', K, num_eve, dist));
+    legend([p_bs, p_b, p_e], 'Location', 'NorthWest');
+    
+    % Zapis do pliku
+    try
+        save_figure(fig_top, '../topology/topology_artificial_noise');
+    catch
+        warning('Funkcja save_figure nie jest dostępna.');
+    end
 end
