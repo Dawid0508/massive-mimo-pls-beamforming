@@ -14,7 +14,7 @@ rng(p.rng_seed);
 b_vec       = [1 2 3 4 5 Inf];               % Rozdzielczość DAC [bity]
 b_show      = [1, 2, 4, Inf];                % Wybrane bity dla Sweepu B
 SNR_tx_vec  = 80:10:140;                     % Transmit SNR sweep [dB]
-SNR_fixed   = 110;                           % Stały SNR_tx dla Sweepu A
+SNR_fixed   = 90;                           % Stały SNR_tx dla Sweepu A
 Nt          = 32;                            % Liczba anten (Massive MIMO)
 K           = 4;                             % Liczba użytkowników
 numIter     = 40;                            % Iteracje kanału
@@ -175,6 +175,8 @@ for s_idx = 1:length(SNR_tx_vec)
 end
 R_sec_snr = R_sec_snr_acc / numIter;
 
+plot_dac_topology(dist_b, theta_bobs, dist_e, theta_e);
+
 % =========================================================================
 % --- WIZUALIZACJA --------------------------------------------------------
 % =========================================================================
@@ -268,4 +270,55 @@ end
 
 function out = ternary(cond, a, b)
     if cond, out = a; else, out = b; end
+end
+
+% =========================================================================
+% FUNKCJA POMOCNICZA: Generowanie topologii scenariusza (DAC Quantisation)
+% =========================================================================
+function plot_dac_topology(dist_b, theta_bobs, dist_e, theta_e)
+    fig_top = figure('Color', 'w', 'Position', [150 150 700 700]);
+    hold on; grid on; box on;
+    
+    % Konwersja na współrzędne kartezjańskie (BS w 0,0)
+    x_bs = 0; y_bs = 0;
+    max_d = max(dist_b, dist_e) + 15;
+    
+    % Rysowanie BS
+    p_bs = plot(x_bs, y_bs, 'k^', 'MarkerSize', 12, 'MarkerFaceColor', 'k', 'DisplayName', 'Base Station (BS)');
+    text(x_bs, y_bs - 4, 'BS (0,0)', 'HorizontalAlignment', 'center', 'Color', 'k');
+    
+    % Rysowanie Ewy
+    x_e = dist_e * sind(theta_e);
+    y_e = dist_e * cosd(theta_e);
+    p_e = plot(x_e, y_e, 'rs', 'MarkerSize', 10, 'MarkerFaceColor', 'r', 'DisplayName', 'Eve');
+    text(x_e + 2, y_e, sprintf('Eve\n(%gm, %g\\circ)', dist_e, theta_e), 'Color', 'r', 'FontSize', 9);
+    
+    % Rysowanie Bobów
+    p_b = [];
+    for k = 1:length(theta_bobs)
+        x_b = dist_b * sind(theta_bobs(k));
+        y_b = dist_b * cosd(theta_bobs(k));
+        
+        p_b = plot(x_b, y_b, 'bo', 'MarkerSize', 8, 'MarkerFaceColor', 'b');
+        text(x_b - 2.5, y_b - 2.5, sprintf('B_{%d}\n(%gm, %g\\circ)', k, dist_b, theta_bobs(k)), ...
+             'Color', 'b', 'FontSize', 8, 'HorizontalAlignment', 'right');
+    end
+    if ~isempty(p_b)
+        set(p_b, 'DisplayName', sprintf('Bobs (K=%d)', length(theta_bobs)));
+    end
+    
+    % Ustawienia osi
+    axis equal;
+    xlim([-max_d, max_d]);
+    ylim([-10, max_d]);
+    xlabel('X [m]'); ylabel('Y [m]');
+    title(sprintf('Scenario 5: Hardware Limits (K=%d Bobs, 1 Eve)', length(theta_bobs)));
+    legend([p_bs, p_b, p_e], 'Location', 'NorthWest');
+    
+    % Zapis do pliku
+    try
+        save_figure(fig_top, '../topology/topology_low_res_dac');
+    catch
+        warning('Funkcja save_figure nie jest dostępna.');
+    end
 end
