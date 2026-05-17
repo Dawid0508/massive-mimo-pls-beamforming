@@ -108,7 +108,9 @@ title(sprintf('Fairness vs K (Transmit SNR = %d dB)', SNR_fixed));
 legend('Matrix (Frobenius)', 'Vector (per-user)', 'Location', 'SouthWest');
 
 sgtitle(sprintf('ZF Normalization Trade-off: 6 GHz CDL-A (Nt = %d, Full Sector Spread)', Nt));
-save_figure(fig, 'fig_fairness_normalization_cdl');
+save_figure(fig, 'fig_fairness_normalization');
+
+plot_multi_user_topology(dist_k_sweep, theta_k_sweep, dist_e, theta_e);
 
 % =========================================================================
 % FUNKCJA WYKONAWCZA SWEEPÓW
@@ -223,4 +225,57 @@ function cdl = setup_matlab_cdl(Nt, fc, theta, band_tag)
     cdl.ReceiveAntennaArray.Size = [1 1 1 1 1];
     cdl.NumTimeSamples = 1;
     cdl.ChannelFiltering = false; 
+end
+
+% =========================================================================
+% FUNKCJA POMOCNICZA: Generowanie topologii scenariusza (Multi-User) - UPROSZCZONA
+% =========================================================================
+function plot_multi_user_topology(dist_b_vec, theta_b_vec, dist_e, theta_e)
+    fig_top = figure('Color', 'w', 'Position', [150 150 700 700]);
+    hold on; grid on; box on;
+    
+    % Konwersja na kartezjańskie (BS w 0,0, oś Y to broadside 0 st.)
+    x_bs = 0; y_bs = 0;
+    max_d = max([dist_b_vec, dist_e]) + 20;
+    
+    % Rysowanie Ewy
+    x_e = dist_e * sind(theta_e);
+    y_e = dist_e * cosd(theta_e);
+    p_e = plot(x_e, y_e, 'rs', 'MarkerSize', 10, 'MarkerFaceColor', 'r', 'DisplayName', 'Eve');
+    text(x_e + 3, y_e, sprintf('Eve\n(%gm, %g\\circ)', dist_e, theta_e), 'Color', 'r', 'FontSize', 9);
+    
+    % Rysowanie Bobów
+    p_b = [];
+    for k = 1:length(dist_b_vec)
+        x_b = dist_b_vec(k) * sind(theta_b_vec(k));
+        y_b = dist_b_vec(k) * cosd(theta_b_vec(k));
+        
+        p_b = plot(x_b, y_b, 'bo', 'MarkerSize', 8, 'MarkerFaceColor', 'b');
+        
+        % Opis co drugiego Boba lub skrajnych, by zbytnio nie zamazać wykresu
+        if k == 1 || k == length(dist_b_vec)
+            text(x_b + 3, y_b, sprintf('B_{%d}\n(%gm, %g\\circ)', k, dist_b_vec(k), theta_b_vec(k)), 'Color', 'b', 'FontSize', 8);
+        end
+    end
+    % Ustawiamy nazwę w legendzie tylko dla ostatniego narysowanego Boba
+    set(p_b, 'DisplayName', sprintf('Bobs (K=%d)', length(dist_b_vec)));
+    
+    % Rysowanie stacji bazowej
+    p_bs = plot(x_bs, y_bs, 'k^', 'MarkerSize', 12, 'MarkerFaceColor', 'k', 'DisplayName', 'Base Station (BS)');
+    text(x_bs, y_bs - 5, 'BS (0,0)', 'HorizontalAlignment', 'center', 'Color', 'k');
+    
+    % Ustawienia osi
+    axis equal;
+    xlim([-max_d, max_d]);
+    ylim([-20, max_d]);
+    xlabel('X [m]'); ylabel('Y [m]');
+    title(sprintf('Scenario 2: Normalization fairness (K=%d)', length(dist_b_vec)));
+    legend([p_bs, p_b, p_e], 'Location', 'NorthWest');
+    
+    % Zapis z użyciem Twojej funkcji
+    try
+        save_figure(fig_top, '../topology/topology_fairness');
+    catch
+        warning('Funkcja save_figure nie jest dostępna. Wykres nie został zapisany automatycznie.');
+    end
 end

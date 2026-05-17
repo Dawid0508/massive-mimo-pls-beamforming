@@ -220,8 +220,8 @@ function plot_topology(dist_b, theta_b, dist_e, theta_e)
     max_d = max(dist_b, dist_e) + 15;
     xlim([-max_d, max_d]);
     ylim([-max_d/2, max_d]); % Dopasowane do widoku "z przodu" anteny
-    xlabel('X [m] (Szerokość)'); ylabel('Y [m] (Dystans w kierunku broadside)');
-    title('Scenariusz PLS: Topologia sieci (Widok z góry)');
+    xlabel('X [m]'); ylabel('Y [m]');
+    title('Scenario 1: 6GHz vs mmWave');
     legend('Location', 'NorthEast');
 
     save_figure(fig_top, '../topology/topology_baseline');
