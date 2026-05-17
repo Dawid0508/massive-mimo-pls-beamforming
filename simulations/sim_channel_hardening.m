@@ -93,6 +93,8 @@ end
 % Theoretical reference: Var = 1/Nt dla czystego kanału i.i.d. Rayleigha
 var_theory = 1 ./ Nt_vec;
 
+plot_hardening_topology(dist_b, -30, dist_e, 30);
+
 % --- Visualisation -------------------------------------------------------
 fig = figure('Color', 'w', 'Position', [100 100 1200 760]);
 
@@ -140,7 +142,7 @@ xlabel('Number of antennas N_t'); ylabel('Std(R_{sec}) (bits/s/Hz)');
 title('Outage sensitivity collapses with N_t');
 
 sgtitle('Massive MIMO Channel Hardening (nrCDLChannel / P_tx Physics)');
-save_figure(fig, 'fig_channel_hardening_cdl');
+save_figure(fig, 'fig_channel_hardening');
 
 % =========================================================================
 % FUNKCJA POMOCNICZA: Konfiguracja kanału statycznego
@@ -165,4 +167,48 @@ function cdl = setup_matlab_cdl_stat(Nt, fc, theta, band_tag)
     
     cdl.NumTimeSamples = 1;
     cdl.ChannelFiltering = false; 
+end
+
+% =========================================================================
+% FUNKCJA POMOCNICZA: Generowanie topologii scenariusza (Channel Hardening)
+% =========================================================================
+function plot_hardening_topology(dist_b, theta_b, dist_e, theta_e)
+    fig_top = figure('Color', 'w', 'Position', [150 150 700 700]);
+    hold on; grid on; box on;
+    
+    % Konwersja na współrzędne kartezjańskie (BS w 0,0)
+    x_bs = 0; y_bs = 0;
+    max_d = max(dist_b, dist_e) + 15;
+    
+    % Rysowanie BS
+    plot(x_bs, y_bs, 'k^', 'MarkerSize', 12, 'MarkerFaceColor', 'k', 'DisplayName', 'Base Station (BS)');
+    text(x_bs, y_bs - 4, 'BS (0,0)', 'HorizontalAlignment', 'center', 'Color', 'k');
+    
+    % Rysowanie Ewy
+    x_e = dist_e * sind(theta_e);
+    y_e = dist_e * cosd(theta_e);
+    plot(x_e, y_e, 'rs', 'MarkerSize', 10, 'MarkerFaceColor', 'r', 'DisplayName', 'Eve');
+    text(x_e + 2, y_e, sprintf('Eve\n(%gm, %g\\circ)', dist_e, theta_e), 'Color', 'r', 'FontSize', 9);
+    
+    % Rysowanie Boba
+    x_b = dist_b * sind(theta_b);
+    y_b = dist_b * cosd(theta_b);
+    plot(x_b, y_b, 'bo', 'MarkerSize', 10, 'MarkerFaceColor', 'b', 'DisplayName', 'Bob');
+    text(x_b - 2, y_b - 2, sprintf('Bob\n(%gm, %g\\circ)', dist_b, theta_b), ...
+         'Color', 'b', 'FontSize', 9, 'HorizontalAlignment', 'right');
+    
+    % Ustawienia osi
+    axis equal;
+    xlim([-max_d, max_d]);
+    ylim([-10, max_d]);
+    xlabel('X [m]'); ylabel('Y [m]');
+    title('Scenario 6: Channel Hardening');
+    legend('Location', 'NorthWest');
+    
+    % Zapis do pliku
+    try
+        save_figure(fig_top, '../topology/topology_channel_hardening');
+    catch
+        warning('Funkcja save_figure nie jest dostępna.');
+    end
 end
