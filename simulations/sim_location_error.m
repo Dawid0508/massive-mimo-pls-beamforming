@@ -1,9 +1,9 @@
 % =========================================================================
 % SCENARIO: Location-Error Amplification (the "Narrow-Beam" paradox)
 % -------------------------------------------------------------------------
-% 3GPP nrCDL channels with FSPL; transmit power set so Bob's received SNR
-% matches SNR_rx_dB after path loss. The BS forms MRT from a channel estimate
-% at a mis-pointed angle  theta_hat = theta_b + N(0, sigma_loc^2).
+% Zaktualizowano: nrCDLChannel, fizyczny FSPL, Transmit SNR (wzorzec zespołu).
+% BS forms MRT from estimate at mis-pointed angle
+%   theta_hat = theta_b + N(0, sigma_loc^2).
 % =========================================================================
 pls_startup();
 addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
@@ -14,8 +14,9 @@ sigma_loc_vec = 0:0.25:5;
 theta_b       = -10;
 theta_e       =  15;
 dist          = p.link_dist_m;
-SNR_rx_dB     = 20;
-noise_var     = p.noise_var;
+SNR_tx_dB     = 100;
+P_tx          = 10^(SNR_tx_dB / 10);
+noise_var     = 1;
 numIter       = p.numIter;
 
 bands = struct( ...
@@ -35,16 +36,13 @@ cdl_b   = nrCDLChannel;
 cdl_e   = nrCDLChannel;
 cdl_hat = nrCDLChannel;
 
-c = pls_colors();
-
 for b = 1:2
     fc = bands(b).fc;  Nt = bands(b).Nt;
-    [PL_lin, ~] = compute_fspl(dist, fc);
-    P_tx = rx_snr_power('tx_for_rx', SNR_rx_dB, PL_lin);
+    [PL_lin, PL_dB] = compute_fspl(dist, fc);
 
-    print_scenario_snr('title', sprintf('Location error @ %s', bands(b).name), ...
-        'SNR_rx_dB', SNR_rx_dB, 'dist_m', dist, 'fc_Hz', fc, ...
-        'actors', {'Bob', 'Eve'});
+    fprintf('\n--- Location error @ %s ---\n', bands(b).name);
+    fprintf('  Transmit SNR: %d dB\n', SNR_tx_dB);
+    fprintf('  d = %g m (FSPL: %.2f dB)\n', dist, PL_dB);
 
     cdl_b   = setup_matlab_cdl(cdl_b, Nt, fc, theta_b);
     cdl_e   = setup_matlab_cdl(cdl_e, Nt, fc, theta_e);
@@ -93,13 +91,11 @@ for b = 1:2
     end
 end
 
-fig = figure('Color', c.bg, 'Position', [100 100 1200 760]);
+fig = figure('Color', 'w', 'Position', [100 100 1200 760]);
 
 subplot(2, 2, 1);
-plot(sigma_loc_vec, SR(1,:), '-o', 'LineWidth', 2, 'Color', c.sub6, ...
-    'MarkerFaceColor', c.sub6); hold on;
-plot(sigma_loc_vec, SR(2,:), '-s', 'LineWidth', 2, 'Color', c.mmwave, ...
-    'MarkerFaceColor', c.mmwave);
+plot(sigma_loc_vec, SR(1,:), '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
+plot(sigma_loc_vec, SR(2,:), '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
 grid on; box on;
 xlabel('Location std-dev \sigma_{loc} (deg)');
 ylabel('Secrecy Rate (bits/s/Hz)');
@@ -107,14 +103,12 @@ title('Secrecy Rate vs pointing error');
 legend(bands(1).name, bands(2).name, 'Location', 'NorthEast');
 
 subplot(2, 2, 2);
-plot(sigma_loc_vec, P_on_tgt(1,:), '-o', 'LineWidth', 2, 'Color', c.sub6, ...
-    'MarkerFaceColor', c.sub6); hold on;
-plot(sigma_loc_vec, P_on_tgt(2,:), '-s', 'LineWidth', 2, 'Color', c.mmwave, ...
-    'MarkerFaceColor', c.mmwave);
-hbw6 = xline(bw_3dB(1)/2, ':', sprintf('BW_{3dB}/2 (6 GHz) \\approx %.2f^{\\circ}', bw_3dB(1)/2), ...
-    'Color', c.sub6, 'LineWidth', 1.2);
-hbw28 = xline(bw_3dB(2)/2, ':', sprintf('BW_{3dB}/2 (28 GHz) \\approx %.2f^{\\circ}', bw_3dB(2)/2), ...
-    'Color', c.mmwave, 'LineWidth', 1.2);
+plot(sigma_loc_vec, P_on_tgt(1,:), '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
+plot(sigma_loc_vec, P_on_tgt(2,:), '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
+hbw6 = xline(bw_3dB(1)/2, 'b:', sprintf('BW_{3dB}/2 (6 GHz) \\approx %.2f^{\\circ}', bw_3dB(1)/2), ...
+    'LineWidth', 1.2);
+hbw28 = xline(bw_3dB(2)/2, 'r:', sprintf('BW_{3dB}/2 (28 GHz) \\approx %.2f^{\\circ}', bw_3dB(2)/2), ...
+    'LineWidth', 1.2);
 setappdata(hbw6, 'plsConstLabelSide', 'left');
 setappdata(hbw28, 'plsConstLabelSide', 'left');
 pls_axis_prefs(gca, 'refLabelV', 'bottom', 'refLabelOrient', 'aligned', 'staggerRef', true);
@@ -126,10 +120,8 @@ legend(bands(1).name, bands(2).name, 'Location', 'NorthEast');
 
 subplot(2, 2, 3);
 SR_rel = [SR(1,:)/max(SR(1,1), eps); SR(2,:)/max(SR(2,1), eps)];
-plot(sigma_loc_vec, SR_rel(1,:), '-o', 'LineWidth', 2, 'Color', c.sub6, ...
-    'MarkerFaceColor', c.sub6); hold on;
-plot(sigma_loc_vec, SR_rel(2,:), '-s', 'LineWidth', 2, 'Color', c.mmwave, ...
-    'MarkerFaceColor', c.mmwave);
+plot(sigma_loc_vec, SR_rel(1,:), '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
+plot(sigma_loc_vec, SR_rel(2,:), '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
 grid on; box on; ylim([0 1.05]);
 xlabel('Location std-dev \sigma_{loc} (deg)');
 ylabel('Normalised Secrecy Rate');
@@ -150,8 +142,8 @@ title('mmWave beam under location error');
 legend(arrayfun(@(s) sprintf('\\sigma_{loc} = %.2g^{\\circ}', s), sigma_snap, 'UniformOutput', false), ...
        'Location', 'NorthWest');
 
-sgtitle(sprintf('Location-error (3GPP CDL + FSPL, SNR_{rx} = %d dB, d = %d m)', ...
-    SNR_rx_dB, dist));
+sgtitle(sprintf('Location-error (nrCDL + FSPL, SNR_{tx} = %d dB, d = %d m)', ...
+    SNR_tx_dB, dist));
 
 save_figure(fig, 'fig_location_error');
 
