@@ -1,203 +1,271 @@
 % =========================================================================
 % SCENARIO: Low-Resolution DAC quantisation in Massive MIMO PLS
 % -------------------------------------------------------------------------
-% Reference: Y. Xu et al., "Secure Massive MIMO Communication With
-%            Low-Resolution DACs", IEEE TWC 2018 (doc/8626548).
-%            Scenariusze_pomysly.docx (Low-Resolution DACs scenario).
-%
-% Massive arrays burn power on per-antenna RF chains, so 6G hardware
-% trends towards 1-3 bit DACs per branch. Quantisation distortion can
-% be modelled via Bussgang's theorem:
-%
-%       x_q = a * x + n_q ,    Cov(n_q) = (1 - a^2) * P_x * I
-%
-% with n_q approximately uncorrelated with x (Gaussian input). The
-% quantisation noise is *isotropic*, so it leaks energy in every
-% direction, including towards Eve. The interesting question: does
-% the relative degradation hurt Bob or Eve more?
-%
-% This script uses the *direct* uniform quantiser (utils/uniform_quantize)
-% and reports Bob, Eve, and Secrecy Sum-Rates for b = {1, 2, 3, 4, Inf}.
+% Zaktualizowano: Zastosowano "Common Random Numbers" (Wspólne zmienne
+% losowe). Pętla Monte Carlo (kanały) jest na zewnątrz, a pętla sprzętowa 
+% (bity DAC) wewnątrz. Gwarantuje to idealnie uczciwe porównanie algorytmów.
 % =========================================================================
 pls_startup();
 addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
 p = default_params();
 rng(p.rng_seed);
 
-% --- Configuration -------------------------------------------------------
-b_vec       = [1 2 3 4 5 Inf];               % DAC bits per I/Q branch
-SNR_rx_vec  = 0:5:30;                        % received SNR sweep
-SNR_fixed   = 20;                            % dB, used for the b sweep
-Nt          = 64;
-K           = 4;
-numIter     = 80;
-numSym      = 64;                            % symbols per Monte-Carlo run
-noise_var   = p.noise_var;
+% --- KONFIGURACJA SYSTEMU I FIZYKI ---------------------------------------
+b_vec       = [1 2 3 4 5 Inf];               % Rozdzielczość DAC [bity]
+b_show      = [1, 2, 4, Inf];                % Wybrane bity dla Sweepu B
+SNR_tx_vec  = 80:10:140;                     % Transmit SNR sweep [dB]
+SNR_fixed   = 110;                           % Stały SNR_tx dla Sweepu A
+Nt          = 64;                            % Liczba anten (Massive MIMO)
+K           = 4;                             % Liczba użytkowników
+numIter     = 40;                            % Iteracje kanału
+numSym      = 1000;                          % ZWIĘKSZONO! Lepsza statystyka
+noise_var   = 1;                             % Znormalizowany szum tła
 
-print_scenario_snr('title', 'Low-resolution DAC', ...
-    'SNR_rx_dB', SNR_fixed, ...
-    'actors', {sprintf('Bob (K=%d)', K), 'Eve'}, ...
-    'notes', sprintf('SNR sweep (received): %d:%d:%d dB', ...
-        SNR_rx_vec(1), SNR_rx_vec(2)-SNR_rx_vec(1), SNR_rx_vec(end)));
+fc          = p.fc_sub6;                     % Pasmo 6 GHz
+dist_b      = 50;                            % Dystans do Bobów [m]
+dist_e      = 40;                            % Dystans do Ewy [m]
+theta_e     = 25;                            % Kąt podsłuchiwacza
 
-% Result storage at SNR_fixed
-R_bob   = zeros(1, length(b_vec));
-R_eve   = zeros(1, length(b_vec));
-R_sec   = zeros(1, length(b_vec));
+[PL_lin_b, PL_dB_b] = compute_fspl(dist_b, fc);
+[PL_lin_e, PL_dB_e] = compute_fspl(dist_e, fc);
 
-% Result storage for SNR sweep at b in {1, 2, Inf}
-b_show  = [1, 2, Inf];
-R_sec_snr = zeros(length(b_show), length(SNR_rx_vec));
+fprintf('\n--- Low-Res DACs @ 6 GHz (Nt=%d) ---\n', Nt);
+fprintf('  Dystans Bob: %g m (FSPL: %.2f dB)\n', dist_b, PL_dB_b);
+fprintf('  Dystans Eve: %g m (FSPL: %.2f dB)\n', dist_e, PL_dB_e);
 
-% Empirical Bussgang factor a(b) - useful auxiliary curve
-a_emp   = zeros(size(b_vec));
+% Przygotowanie obiektów kanałowych
+theta_bobs = linspace(-60, 60, K);
+cdl_b = cell(K, 1);
+for k = 1:K, cdl_b{k} = setup_matlab_cdl(nrCDLChannel, Nt, fc, theta_bobs(k)); end
+cdl_e = setup_matlab_cdl(nrCDLChannel, Nt, fc, theta_e);
 
-% --- Sweep A: Secrecy decomposition vs DAC bits --------------------------
-P_rx = rx_snr_power('linear', SNR_fixed);
-for bi = 1:length(b_vec)
-    b = b_vec(bi);
-    acc_b = 0; acc_e = 0; acc_s = 0;
-    a_acc = 0; a_n = 0;
+% Akumulatory na wyniki (wypełniane wewnątrz pętli)
+R_bob_acc = zeros(1, length(b_vec));
+R_eve_acc = zeros(1, length(b_vec));
+R_sec_acc = zeros(1, length(b_vec));
+a_acc_vec = zeros(1, length(b_vec));
+a_n_vec   = zeros(1, length(b_vec));
 
-    for it = 1:numIter
-        H     = (randn(Nt, K) + 1j*randn(Nt, K)) / sqrt(2);
-        h_eve = (randn(Nt, 1) + 1j*randn(Nt, 1)) / sqrt(2);
+R_sec_snr_acc = zeros(length(b_show), length(SNR_tx_vec));
 
-        W_raw = H * pinv(H' * H);
-        W = W_raw / norm(W_raw, 'fro') * sqrt(P_rx);
+% =========================================================================
+% --- SWEEP A: Wpływ rozdzielczości DAC (b) przy stałym Transmit SNR
+% =========================================================================
+fprintf('Rozpoczynam Sweep A (Rozdzielczość DAC)...\n');
+P_tx = 10^(SNR_fixed / 10);
 
-        % i.i.d. Gaussian symbols
-        s   = (randn(K, numSym) + 1j*randn(K, numSym)) / sqrt(2);
-        x   = W * s;                              % Nt x numSym before DAC
-        x_q = uniform_quantize(x, b);             % per-antenna quantisation
-
-        % Empirical Bussgang factor: a = E[<x,x_q>]/E[|x|^2]
-        a_acc = a_acc + real(x(:)' * x_q(:)) / (x(:)' * x(:) + eps);
-        a_n   = a_n + 1;
-
-        % Received samples (Bob and Eve)
-        y_b = H' * x_q + sqrt(noise_var/2) * (randn(K, numSym) + 1j*randn(K, numSym));
-        y_e = h_eve' * x_q + sqrt(noise_var/2) * (randn(1, numSym) + 1j*randn(1, numSym));
-
-        % Per-user empirical SINR via signal/(residual) decomposition
-        % Bob k:   useful = h_k^H W e_k s_k   ;   anything else = noise+leakage
+% GŁÓWNA PĘTLA ZEWNĘTRZNA (Losowanie "świata" raz na iterację)
+for it = 1:numIter
+    
+    % 1. ŚRODOWISKO RADIOWE: Losujemy kanały tylko RAZ
+    H_eff = zeros(Nt, K);
+    for k = 1:K
+        release(cdl_b{k}); cdl_b{k}.Seed = randi([0 2^31-1]);
+        [pg_b, ~] = cdl_b{k}(); hb = squeeze(sum(pg_b, 2)); hb = hb(:);
+        H_eff(:, k) = sqrt((1 / PL_lin_b) * Nt) * (hb / norm(hb));
+    end
+    release(cdl_e); cdl_e.Seed = randi([0 2^31-1]);
+    [pg_e, ~] = cdl_e(); he = squeeze(sum(pg_e, 2)); he = he(:);
+    h_eff_e = sqrt((1 / PL_lin_e) * Nt) * (he / norm(he));
+    
+    % 2. MATEMATYKA STACJI: Idealny Prekoder
+    W_raw = H_eff * pinv(H_eff' * H_eff);
+    W = W_raw / norm(W_raw, 'fro') * sqrt(P_tx);
+    
+    % 3. SYGNAŁY I SZUM: Identyczne dla każdego DAC!
+    s = (randn(K, numSym) + 1j*randn(K, numSym)) / sqrt(2);
+    x = W * s;
+    n_th_b = sqrt(noise_var/2) * (randn(K, numSym) + 1j*randn(K, numSym));
+    n_th_e = sqrt(noise_var/2) * (randn(1, numSym) + 1j*randn(1, numSym));
+    
+    % PĘTLA WEWNĘTRZNA: Testujemy sprzęt w tych samych warunkach
+    for bi = 1:length(b_vec)
+        b = b_vec(bi);
+        
+        % Kwantyzacja (Tylko ten element różnicuje nam symulację)
+        x_q = local_uniform_quantize(x, b);       
+        
+        a_acc_vec(bi) = a_acc_vec(bi) + real(x(:)' * x_q(:)) / (x(:)' * x(:) + eps);
+        a_n_vec(bi)   = a_n_vec(bi) + 1;
+        
+        % Propagacja w powietrzu (Używamy wspólnego szumu termicznego!)
+        y_b = H_eff' * x_q + n_th_b;
+        y_e = h_eff_e' * x_q + n_th_e;
+        
+        sum_R_b = 0; sum_R_e = 0; sum_R_s = 0;
         for k = 1:K
-            % Useful and aggregate signals through the *quantised* x
-            % estimate via least-squares fit on the symbol sequence
-            % (works because s is i.i.d. and unit-variance):
             useful_b = mean( real( y_b(k, :) .* conj(s(k, :)) ) );
-            % Total received power minus the estimated useful component
             tot_b    = mean( abs(y_b(k, :)).^2 );
             sig_b    = useful_b^2;
             inr_b    = max(tot_b - sig_b, eps);
             R_b_k    = log2(1 + sig_b / inr_b);
-
-            % Eve treats user-k symbol as the desired one (worst case)
+            
             useful_e = mean( real( y_e .* conj(s(k, :)) ) );
             tot_e    = mean( abs(y_e).^2 );
             sig_e    = useful_e^2;
             inr_e    = max(tot_e - sig_e, eps);
             R_e_k    = log2(1 + sig_e / inr_e);
-
-            acc_b = acc_b + R_b_k;
-            acc_e = acc_e + R_e_k;
-            acc_s = acc_s + secrecy_rate(R_b_k, R_e_k);
+            
+            sum_R_b = sum_R_b + R_b_k;
+            sum_R_e = sum_R_e + R_e_k;
+            sum_R_s = sum_R_s + max(0, R_b_k - R_e_k);
         end
+        % Zrzut do akumulatorów globalnych
+        R_bob_acc(bi) = R_bob_acc(bi) + sum_R_b;
+        R_eve_acc(bi) = R_eve_acc(bi) + sum_R_e;
+        R_sec_acc(bi) = R_sec_acc(bi) + sum_R_s;
     end
-
-    R_bob(bi) = acc_b / numIter;
-    R_eve(bi) = acc_e / numIter;
-    R_sec(bi) = acc_s / numIter;
-    a_emp(bi) = a_acc / max(a_n, 1);
 end
+% Uśrednianie wyników Sweep A
+R_bob = R_bob_acc / numIter;
+R_eve = R_eve_acc / numIter;
+R_sec = R_sec_acc / numIter;
+a_emp = a_acc_vec ./ max(a_n_vec, 1);
 
-% --- Sweep B: SNR vs Secrecy at three DAC resolutions --------------------
-for ii = 1:length(b_show)
-    b = b_show(ii);
-    for s_idx = 1:length(SNR_rx_vec)
-        P_rx = rx_snr_power('linear', SNR_rx_vec(s_idx));
-        acc_s = 0;
-        for it = 1:numIter
-            H     = (randn(Nt, K) + 1j*randn(Nt, K)) / sqrt(2);
-            h_eve = (randn(Nt, 1) + 1j*randn(Nt, 1)) / sqrt(2);
-            W_raw = H * pinv(H' * H);
-            W     = W_raw / norm(W_raw, 'fro') * sqrt(P_rx);
-
-            s   = (randn(K, numSym) + 1j*randn(K, numSym)) / sqrt(2);
-            x   = W * s;
-            x_q = uniform_quantize(x, b);
-            y_b = H' * x_q + sqrt(noise_var/2) * (randn(K, numSym) + 1j*randn(K, numSym));
-            y_e = h_eve' * x_q + sqrt(noise_var/2) * (randn(1, numSym) + 1j*randn(1, numSym));
-
+% =========================================================================
+% --- SWEEP B: Secrecy Rate vs Transmit SNR (Również wspólne kanały!)
+% =========================================================================
+fprintf('Rozpoczynam Sweep B (Transmit SNR)...\n');
+for s_idx = 1:length(SNR_tx_vec)
+    P_tx_s = 10^(SNR_tx_vec(s_idx)/10);
+    
+    for it = 1:numIter
+        % 1. Wylosowanie środowiska
+        H_eff = zeros(Nt, K);
+        for k = 1:K
+            release(cdl_b{k}); cdl_b{k}.Seed = randi([0 2^31-1]);
+            [pg_b, ~] = cdl_b{k}(); hb = squeeze(sum(pg_b, 2)); hb = hb(:);
+            H_eff(:, k) = sqrt((1 / PL_lin_b) * Nt) * (hb / norm(hb));
+        end
+        release(cdl_e); cdl_e.Seed = randi([0 2^31-1]);
+        [pg_e, ~] = cdl_e(); he = squeeze(sum(pg_e, 2)); he = he(:);
+        h_eff_e = sqrt((1 / PL_lin_e) * Nt) * (he / norm(he));
+        
+        W_raw = H_eff * pinv(H_eff' * H_eff);
+        W     = W_raw / norm(W_raw, 'fro') * sqrt(P_tx_s);
+        
+        s = (randn(K, numSym) + 1j*randn(K, numSym)) / sqrt(2);
+        x = W * s;
+        n_th_b = sqrt(noise_var/2) * (randn(K, numSym) + 1j*randn(K, numSym));
+        n_th_e = sqrt(noise_var/2) * (randn(1, numSym) + 1j*randn(1, numSym));
+        
+        % Pętla po rozdzielczościach DAC na wspólnym środowisku
+        for ii = 1:length(b_show)
+            b = b_show(ii);
+            x_q = local_uniform_quantize(x, b);
+            
+            y_b = H_eff' * x_q + n_th_b;
+            y_e = h_eff_e' * x_q + n_th_e;
+            
+            sum_R_s = 0;
             for k = 1:K
                 useful_b = mean(real(y_b(k,:) .* conj(s(k,:))));
                 tot_b    = mean(abs(y_b(k,:)).^2);
                 R_b_k    = log2(1 + useful_b^2 / max(tot_b - useful_b^2, eps));
+                
                 useful_e = mean(real(y_e .* conj(s(k,:))));
                 tot_e    = mean(abs(y_e).^2);
                 R_e_k    = log2(1 + useful_e^2 / max(tot_e - useful_e^2, eps));
-                acc_s    = acc_s + secrecy_rate(R_b_k, R_e_k);
+                
+                sum_R_s  = sum_R_s + max(0, R_b_k - R_e_k);
             end
+            R_sec_snr_acc(ii, s_idx) = R_sec_snr_acc(ii, s_idx) + sum_R_s;
         end
-        R_sec_snr(ii, s_idx) = acc_s / numIter;
     end
 end
+R_sec_snr = R_sec_snr_acc / numIter;
 
-% --- Visualisation -------------------------------------------------------
+% =========================================================================
+% --- WIZUALIZACJA --------------------------------------------------------
+% =========================================================================
 fig = figure('Color', 'w', 'Position', [100 100 1200 760]);
-
 bar_x = 1:length(b_vec);
-bar_labels = arrayfun(@(b) ternary(isinf(b), 'Inf', sprintf('%d', b)), b_vec, 'UniformOutput', false);
+bar_labels = arrayfun(@(b) ternary(isinf(b), 'Inf (Ideal)', sprintf('%d bit', b)), b_vec, 'UniformOutput', false);
 
-% Top-left: Bob vs Eve sum-rate per b
+% Górny Lewy: Pojemność Boba i Ewy vs Rozdzielczość
 subplot(2, 2, 1);
 bar(bar_x, [R_bob(:) R_eve(:)], 1.0); grid on; box on;
 set(gca, 'XTick', bar_x, 'XTickLabel', bar_labels);
-xlabel('DAC resolution b (bits / I-or-Q branch)');
+xlabel('DAC Resolution (Bits per branch)');
 ylabel('Sum-Rate (bits/s/Hz)');
-title(sprintf('Bob vs Eve under quantisation  (SNR = %d dB)', SNR_fixed));
-legend('Bob', 'Eve', 'Location', 'NorthWest');
+title(sprintf('Bob vs Eve Capacity (Tx SNR = %d dB)', SNR_fixed));
+legend('Bob (Target)', 'Eve (Eavesdropper)', 'Location', 'NorthWest');
 
-% Top-right: Secrecy Sum-Rate vs b
+% Górny Prawy: Secrecy Rate vs Rozdzielczość
 subplot(2, 2, 2);
 bar(bar_x, R_sec, 0.6, 'FaceColor', [0.2 0.6 0.3]);
 grid on; box on;
 set(gca, 'XTick', bar_x, 'XTickLabel', bar_labels);
-xlabel('DAC resolution b (bits / branch)');
+xlabel('DAC Resolution (Bits per branch)');
 ylabel('Secrecy Sum-Rate (bits/s/Hz)');
-title('Secrecy Sum-Rate vs DAC bits');
+title('Overall Network Security (Secrecy Sum-Rate)');
 
-% Bottom-left: Empirical Bussgang factor a(b)
+% Dolny Lewy: Empiryczny czynnik Bussganga
 subplot(2, 2, 3);
 b_finite = b_vec(~isinf(b_vec));
 a_finite = a_emp(~isinf(b_vec));
-bar(b_finite, a_finite, 0.6, 'FaceColor', [0.6 0.4 0.8]); hold on;
+bar(1:length(b_finite), a_finite, 0.6, 'FaceColor', [0.6 0.4 0.8]); hold on;
 c = pls_colors();
-yline(1, '--', 'Ideal DAC: a = 1', 'Color', c.perfect, 'LineWidth', 1.2);
+yline(1, '--', 'Ideal Hardware (a = 1.0)', 'Color', c.perfect, 'LineWidth', 1.5, 'LabelVerticalAlignment', 'bottom');
 grid on; box on;
-xlabel('DAC bits b'); ylabel('Bussgang gain a');
-title('Empirical Bussgang factor');
-ylim([0 1.05]);
+set(gca, 'XTick', 1:length(b_finite), 'XTickLabel', arrayfun(@num2str, b_finite, 'Uniform', false));
+xlabel('DAC bits (b)'); ylabel('Bussgang Gain (a)');
+title('Signal Survival Rate (Bussgang Theorem)');
+ylim([0 1.1]);
 
-% Bottom-right: Secrecy Sum-Rate vs SNR for selected b
+% Dolny Prawy: Sweep SNR
 subplot(2, 2, 4);
-markers = {'-bo', '-ms', '-c^'};
+markers = {'-rs', '-ms', '-go', '-bo'};
 hold on;
 for ii = 1:length(b_show)
-    plot(SNR_rx_vec, R_sec_snr(ii,:), markers{ii}, 'LineWidth', 2, 'MarkerFaceColor', markers{ii}(2));
+    plot(SNR_tx_vec, R_sec_snr(ii,:), markers{ii}, 'LineWidth', 2, 'MarkerFaceColor', markers{ii}(2));
 end
 grid on; box on;
-xlabel('Received SNR (dB, norm. Rayleigh)'); ylabel('Secrecy Sum-Rate (bits/s/Hz)');
-title('Secrecy Sum-Rate vs SNR per DAC resolution');
-labels = arrayfun(@(b) ternary(isinf(b), 'b = Inf (ideal)', sprintf('b = %d bit', b)), b_show, 'UniformOutput', false);
+xlabel('Transmit SNR at Base Station (dB)'); ylabel('Secrecy Sum-Rate (bits/s/Hz)');
+title('Secrecy Capacity vs Transmit Power');
+labels = arrayfun(@(b) ternary(isinf(b), 'Ideal DACs (Inf)', sprintf('%d-bit DACs', b)), b_show, 'UniformOutput', false);
 legend(labels, 'Location', 'NorthWest');
 
-sgtitle(sprintf('Low-resolution DAC quantisation in Massive MIMO PLS  (Nt = %d, K = %d)', Nt, K));
-
+sgtitle(sprintf('Massive MIMO Hardware Limits: Low-Resolution DACs (Nt = %d, K = %d)', Nt, K));
 save_figure(fig, 'fig_low_res_dac');
 
+% =========================================================================
+% FUNKCJE POMOCNICZE
+% =========================================================================
+function xq = local_uniform_quantize(x, b)
+    if isinf(b)
+        xq = x; return;
+    end
+    sigma = sqrt(mean(abs(x(:)).^2));
+    clip_val = 3 * sigma / sqrt(2); 
+    step = 2 * clip_val / (2^b);
 
-% --- tiny inline ternary helper for clean labels -------------------------
+    xr = real(x); xi = imag(x);
+    xr(xr > clip_val) = clip_val; xr(xr < -clip_val) = -clip_val;
+    xi(xi > clip_val) = clip_val; xi(xi < -clip_val) = -clip_val;
+    
+    xqr = floor(xr / step) * step + step/2;
+    xqi = floor(xi / step) * step + step/2;
+    xq = xqr + 1j * xqi;
+    
+    gain = sqrt(mean(abs(x(:)).^2) / mean(abs(xq(:)).^2));
+    xq = xq * gain;
+end
+
+function cdl = setup_matlab_cdl(cdl, Nt, fc, theta)
+    release(cdl);
+    cdl.DelayProfile = 'CDL-A';
+    if fc < 10e9, cdl.DelaySpread = 30e-9; else, cdl.DelaySpread = 10e-9; end
+    cdl.CarrierFrequency = fc;
+    cdl.MaximumDopplerShift = 0;         
+    cdl.TransmitAntennaArray.Size = [1 Nt 1 1 1]; 
+    cdl.TransmitAntennaArray.ElementSpacing = [0.5 0.5 1 1]; 
+    cdl.TransmitArrayOrientation = [-theta; 0; 0];
+    cdl.ReceiveAntennaArray.Size = [1 1 1 1 1];
+    cdl.NumTimeSamples = 1;
+    cdl.ChannelFiltering = false; 
+end
+
 function out = ternary(cond, a, b)
     if cond, out = a; else, out = b; end
 end
