@@ -12,12 +12,12 @@ Run geometry sketches only: `>> generate_topologies`
 
 | Figure                            | Scenario            | Main takeaway                                              |
 | --------------------------------- | ------------------- | ---------------------------------------------------------- |
-| `fig_baseline_6GHz_vs_28GHz.png`  | Baseline            | 6 vs 28 GHz, CDL-A/D, MRT vs ZF, SNR sweep                 |
-| `fig_moving_bob.png`              | Moving Bob          | Fixed beam; mmWave secrecy cliff when Bob leaves boresight |
+| `fig_baseline_6GHz_vs_28GHz_nrCDL.png`  | Baseline            | 6 vs 28 GHz, CDL-A, MRT vs ZF, SNR_tx sweep                |
+| `fig_moving_bob_doppler.png`            | Moving Bob          | Fixed beam; mmWave secrecy cliff when Bob leaves boresight |
 | `fig_pilot_contamination.png`     | Pilot contamination | Active hijack: secrecy vs Eve pilot strength               |
 | `fig_location_error.png`          | Location error      | Pointing error hurts narrow mmWave beams most              |
 | `fig_colluding_eavesdroppers.png` | Colluding Eves      | Secrecy vs L cooperating eavesdroppers                     |
-| `fig_artificial_noise.png`        | Artificial noise    | Null-space AN: data/noise split \phi at 6 GHz              |
+| `fig_artificial_noise_tradeoffs.png` | Artificial noise | Null-space AN: L sweep and \phi trade-off at 6 GHz         |
 
 
 ---
@@ -28,9 +28,9 @@ Run geometry sketches only: `>> generate_topologies`
 | Figure                           | Topic                                                 |
 | -------------------------------- | ----------------------------------------------------- |
 | `fig_phase_noise.png`            | Phase noise; matrix vs vector ZF                      |
-| `fig_channel_hardening.png`      | |h|^2/N_t concentration vs N_t                        |
-| `fig_spatial_correlation.png`    | Correlation \rho; ZF normalization + Jain (Bob rates) |
-| `fig_fairness_normalization.png` | SNR and K sweeps; sum-rate vs Jain (Bob rates)        |
+| `fig_channel_hardening_cdl.png`      | |h|^2/N_t concentration vs N_t (nrCDL)              |
+| `fig_spatial_mrt_zf.png`             | Angular crowding; MRT vs ZF; 6 GHz vs 28 GHz         |
+| `fig_fairness_normalization_cdl.png` | SNR_tx and K sweeps; sum-rate vs Jain (Bob rates)    |
 | `fig_low_res_dac.png`            | DAC resolution vs secrecy                             |
 | `fig_pilot_jamming.png`          | Training-slot jamming (DoS)                           |
 | `fig_csi_aging.png`              | Doppler + Wiener CSI predictor                        |
