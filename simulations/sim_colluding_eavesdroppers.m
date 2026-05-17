@@ -1,7 +1,8 @@
 % =========================================================================
-% SCENARIO: 6 GHz vs 28 GHz under targeted/colluding Eves (Spatial Proximity)
+% SCENARIO: 6 GHz vs 28 GHz under Targeted Attack with ARTIFICIAL NOISE
 % -------------------------------------------------------------------------
-% Eves cluster tightly around Bobs (within +/- 6 deg) to exploit beam width.
+% Porównanie odporności systemu z włączonym i wyłączonym Sztucznym Szumem.
+% BS dzieli moc: 70% na dane, 30% na zagłuszanie (AN) w null-space Bobów.
 % =========================================================================
 pls_startup();
 addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
@@ -9,35 +10,34 @@ p = default_params();
 rng(p.rng_seed);
 
 % --- PARAMETRY FIZYCZNE I SYSTEMOWE ---
-dist        = 50;                     % Dystans do użytkowników i podsłuchiwaczy (m)
-L_values    = 1:2:15;                 % Liczba współpracujących Ew (L)
-K           = 4;                      % Liczba legalnych użytkowników (Bobów)
+dist        = 50;                     
+L_values    = 1:2:15;                 
+K           = 4;                      
 numIter     = 10;                     
-SNR_tx_dB   = 100;                    % Transmit SNR stacji bazowej (dB)
+SNR_tx_dB   = 100;                    
 P_tx        = 10^(SNR_tx_dB / 10);
 
-bands = struct( ...
-    'name', {'6 GHz (Massive MIMO)', '28 GHz (Ultra-Massive MIMO)'}, ...
-    'fc',   {p.fc_sub6,              p.fc_mmwave}, ...
-    'Nt',   {p.Nt_sub6,              p.Nt_mmwave}, ...
-    'cdl',  {p.cdl_sub6,             p.cdl_mmwave});
+% Parametry Sztucznego Szumu
+phi_AN      = 0.7; % 70% mocy na przesył danych, 30% na Sztuczny Szum
 
-results_SR    = zeros(2, length(L_values));
-results_Fair  = zeros(2, length(L_values));
+bands = struct( ...
+    'name', {'6 GHz', '28 GHz'}, ...
+    'fc',   {p.fc_sub6, p.fc_mmwave}, ...
+    'Nt',   {p.Nt_sub6, p.Nt_mmwave}, ...
+    'cdl',  {p.cdl_sub6, p.cdl_mmwave});
+
+% Macierze wynikowe: (Pasmo, Tryb_AN, L_values)
+results_SR    = zeros(2, 2, length(L_values));
+results_Fair  = zeros(2, 2, length(L_values));
 
 max_L = max(L_values);
 
 for b = 1:2
-    fc = bands(b).fc;  Nt = bands(b).Nt;  cdl_tag = bands(b).cdl;
-    
-    % Obliczanie bezwzględnego tłumienia przestrzennego (FSPL)
+    fc = bands(b).fc;  Nt = bands(b).Nt;  
     [PL_lin, PL_dB] = compute_fspl(dist, fc);
     
-    fprintf('\n--- Scenariusz: Zacieśniony Atak Kątowy Ew @ %s ---\n', bands(b).name);
-    fprintf('  Liczba anten stacji (Nt): %d\n', Nt);
-    fprintf('  Dystans: %g m, Tłumienie trasy: %.2f dB\n', dist, PL_dB);
+    fprintf('\n--- Symulacja Artificial Noise @ %s ---\n', bands(b).name);
     
-    % Wstępna alokacja obiektów kanałowych
     cdl_b = cell(K, 1);
     for k = 1:K, cdl_b{k} = nrCDLChannel; end
     cdl_e = cell(max_L, 1);
@@ -45,20 +45,18 @@ for b = 1:2
 
     for l_idx = 1:length(L_values)
         num_eve = L_values(l_idx);
-        SR_acc = 0; F_acc = 0;
+        % Akumulatory: [Bez AN, Z AN]
+        SR_acc = zeros(1, 2); 
+        F_acc  = zeros(1, 2);
         
         for it = 1:numIter
-            % Bobowie rozproszeni losowo w przestrzeni sektora
             theta_bobs = -60 + 120*rand(1, K);
             
-            % --- KLUCZOWA MODYFIKACJA: ATAK GEOMETRYCZNY ---
-            % Ewy nie stoją już losowo. Każda Ewa wybiera jednego z Bobów 
-            % i podkrada się ekstremalnie blisko pod jego kąt (w zakresie +/- 6 stopni)
+            % Atak z bliska (Ewy skradają się pod kąty Bobów)
             target_bob_idx = randi(K, 1, num_eve); 
-            angular_error  = 0 + 12 * rand(1, num_eve); % Odchyłka od wprost w Boba
+            angular_error  = -6 + 12 * rand(1, num_eve); 
             theta_eves     = theta_bobs(target_bob_idx) + angular_error;
             
-            % Budowanie kanału efektywnego dla Bobów
             H_eff = zeros(Nt, K);
             for k = 1:K
                 cdl_b{k} = setup_matlab_cdl(cdl_b{k}, Nt, fc, theta_bobs(k));
@@ -68,7 +66,6 @@ for b = 1:2
                 H_eff(:, k) = sqrt((1 / PL_lin) * Nt) * (hb / norm(hb));
             end
             
-            % Budowanie kanału efektywnego dla Ew (śledzących Bobów)
             G_eff = zeros(Nt, num_eve);
             for e = 1:num_eve
                 cdl_e{e} = setup_matlab_cdl(cdl_e{e}, Nt, fc, theta_eves(e));
@@ -78,73 +75,95 @@ for b = 1:2
                 G_eff(:, e) = sqrt((1 / PL_lin) * Nt) * (he / norm(he));
             end
             
-            % Wyliczanie prekodera Zero-Forcing (ZF) z normalizacją macierzową
-            W = H_eff * pinv(H_eff' * H_eff);
-            W = W / norm(W, 'fro');
+            % Prekoder ZF na dane
+            W_raw = H_eff * pinv(H_eff' * H_eff);
+            W = W_raw / norm(W_raw, 'fro');
             
-            R_b = zeros(K, 1);
-            R_e = zeros(K, 1);
+            % --- BAZA PRZESTRZENI ZEROWEJ DLA AN ---
+            % Z znajduje wektory ortogonalne do kanałów Bobów
+            Z = null(H_eff'); 
             
-            for k = 1:K
-                % Legalny użytkownik (Bob)
-                S_b = P_tx * abs(H_eff(:, k)' * W(:, k))^2;
-                I_b = 0;
-                for j = 1:K
-                    if j ~= k
-                        I_b = I_b + P_tx * abs(H_eff(:, k)' * W(:, j))^2;
-                    end
+            % --- PĘTLA TRYBÓW (1: Bez AN, 2: Z AN) ---
+            for an_mode = 1:2
+                if an_mode == 1
+                    phi = 1.0;          % 100% mocy na dane
+                    Q_AN = zeros(Nt, Nt); % Brak szumu
+                else
+                    phi = phi_AN;       % 70% mocy na dane
+                    P_AN = (1 - phi) * P_tx; % 30% mocy na szum
+                    % Kowariancja szumu rozłożona równo w null-space
+                    Q_AN = (P_AN / (Nt - K)) * (Z * Z'); 
                 end
-                R_b(k) = log2(1 + S_b / (I_b + 1));
                 
-                % Współpracujące Ewy (Worst-Case MRC Attack)
-                S_e = P_tx * sum(abs(G_eff' * W(:, k)).^2);
-                R_e(k) = log2(1 + S_e / 1); 
+                R_b = zeros(K, 1);
+                R_e = zeros(K, 1);
+                
+                % Macierz kowariancji zakłóceń u Ew (Szum własny + AN stacji bazowej)
+                R_AN_eve = G_eff' * Q_AN * G_eff + eye(num_eve);
+                R_AN_eve_inv = inv(R_AN_eve);
+                
+                for k = 1:K
+                    % Pojemność Boba (Sygnał przeskalowany przez phi)
+                    S_b = phi * P_tx * abs(H_eff(:, k)' * W(:, k))^2;
+                    I_b = 0;
+                    for j = 1:K
+                        if j ~= k
+                            I_b = I_b + phi * P_tx * abs(H_eff(:, k)' * W(:, j))^2;
+                        end
+                    end
+                    R_b(k) = log2(1 + S_b / (I_b + 1)); % Bob nie odbiera AN
+                    
+                    % Pojemność Ewy pod atakiem MRC (Uwzględnia kolorowy szum AN)
+                    h_ek = sqrt(phi * P_tx) * G_eff' * W(:, k);
+                    R_e(k) = log2(1 + real(h_ek' * R_AN_eve_inv * h_ek));
+                end
+                
+                % Zapis wyników dla danego trybu
+                R_s = max(0, R_b - R_e);
+                SR_acc(an_mode) = SR_acc(an_mode) + sum(R_s);
+                if sum(R_s.^2) == 0
+                    F_acc(an_mode) = F_acc(an_mode) + 0;
+                else
+                    F_acc(an_mode) = F_acc(an_mode) + (sum(R_s))^2 / (K * sum(R_s.^2));
+                end
             end
-            
-            % Obliczanie Secrecy Rate i indeksu Fairness Jaina
-            R_s = max(0, R_b - R_e);
-            SR_acc = SR_acc + sum(R_s);
-            
-            if sum(R_s.^2) == 0
-                jains_val = 0;
-            else
-                jains_val = (sum(R_s))^2 / (K * sum(R_s.^2));
-            end
-            F_acc = F_acc + jains_val;
         end
         
-        results_SR(b, l_idx)   = SR_acc / numIter;
-        results_Fair(b, l_idx) = F_acc  / numIter;
+        results_SR(b, :, l_idx)   = SR_acc / numIter;
+        results_Fair(b, :, l_idx) = F_acc  / numIter;
     end
 end
 
-% --- WIZUALIZACJA METRYK ---
-fig = figure('Color', 'w', 'Position', [100 100 1100 420]);
+% --- WIZUALIZACJA ---
+fig = figure('Color', 'w', 'Position', [100 100 1100 450]);
 
 subplot(1, 2, 1);
-plot(L_values, results_SR(1,:), '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
-plot(L_values, results_SR(2,:), '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
+plot(L_values, squeeze(results_SR(1,1,:)), '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
+plot(L_values, squeeze(results_SR(1,2,:)), '--b^', 'LineWidth', 2, 'MarkerFaceColor', 'b');
+plot(L_values, squeeze(results_SR(2,1,:)), '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
+plot(L_values, squeeze(results_SR(2,2,:)), '--r^', 'LineWidth', 2, 'MarkerFaceColor', 'r');
 grid on; box on;
 xlabel('Number of colluding eavesdroppers (L)');
 ylabel('Secrecy Sum-Rate (bits/s/Hz)');
-title('Secrecy Rate under Close-Range Attack');
-legend(bands(1).name, bands(2).name, 'Location', 'NorthEast');
+title('Impact of Artificial Noise (AN)');
+legend('6 GHz (No AN)', '6 GHz (With 30% AN)', '28 GHz (No AN)', '28 GHz (With 30% AN)', 'Location', 'NorthEast');
 
 subplot(1, 2, 2);
-plot(L_values, results_Fair(1,:), '--bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
-plot(L_values, results_Fair(2,:), '--rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
-grid on; box on;
-ylim([0 1.05]);
+plot(L_values, squeeze(results_Fair(1,1,:)), '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
+plot(L_values, squeeze(results_Fair(1,2,:)), '--b^', 'LineWidth', 2, 'MarkerFaceColor', 'b');
+plot(L_values, squeeze(results_Fair(2,1,:)), '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
+plot(L_values, squeeze(results_Fair(2,2,:)), '--r^', 'LineWidth', 2, 'MarkerFaceColor', 'r');
+grid on; box on; ylim([0 1.05]);
 xlabel('Number of colluding eavesdroppers (L)');
 ylabel("Jain's fairness index");
 title('Fairness across Bobs');
-legend(bands(1).name, bands(2).name, 'Location', 'SouthWest');
+legend('6 GHz (No AN)', '6 GHz (With AN)', '28 GHz (No AN)', '28 GHz (With AN)', 'Location', 'SouthWest');
 
-sgtitle(sprintf('6 GHz vs 28 GHz: Targeted Angular Proximity Attack (\\Delta\\theta \\le 6^\\circ, K = %d)', K));
-save_figure(fig, 'fig_colluding_eavesdroppers_proximity');
+sgtitle(sprintf('Targeted Attack Countermeasures: Baseline vs Artificial Noise (K = %d)', K));
+save_figure(fig, 'fig_artificial_noise_comparison');
 
 % =========================================================================
-% FUNKCJA POMOCNICZA: Dynamiczna re-konfiguracja istniejącego kanału 3GPP
+% FUNKCJA POMOCNICZA
 % =========================================================================
 function cdl = setup_matlab_cdl(cdl, Nt, fc, theta)
     release(cdl);
