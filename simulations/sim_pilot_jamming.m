@@ -210,6 +210,8 @@ for n_idx = 1:length(Nt_vec)
     end
 end
 
+plot_jamming_topology(dist_b, theta_bobs, dist_e, theta_e)
+
 % =========================================================================
 % --- WIZUALIZACJA --------------------------------------------------------
 % =========================================================================
@@ -283,4 +285,58 @@ function cdl = setup_matlab_cdl(cdl, Nt, fc, theta)
     cdl.ReceiveAntennaArray.Size = [1 1 1 1 1];
     cdl.NumTimeSamples = 1;
     cdl.ChannelFiltering = false; 
+end
+
+% =========================================================================
+% FUNKCJA POMOCNICZA: Generowanie topologii scenariusza (Pilot Jamming)
+% =========================================================================
+function plot_jamming_topology(dist_b, theta_bobs, dist_e, theta_e)
+    fig_top = figure('Color', 'w', 'Position', [150 150 700 700]);
+    hold on; grid on; box on;
+    
+    % Konwersja na współrzędne kartezjańskie (BS w 0,0)
+    x_bs = 0; y_bs = 0;
+    max_d = max(dist_b, dist_e) + 15;
+    
+    % Rysowanie Ewy (Jammera) - USUNIĘTO LINIĘ ŁĄCZĄCĄ Z BS
+    x_e = dist_e * sind(theta_e);
+    y_e = dist_e * cosd(theta_e);
+    p_e = plot(x_e, y_e, 'rs', 'MarkerSize', 10, 'MarkerFaceColor', 'r', 'DisplayName', 'Eve (Jammer)');
+    text(x_e + 2, y_e, sprintf('Eve (Jammer)\n(%gm, %g\\circ)', dist_e, theta_e), 'Color', 'r', 'FontSize', 9);
+    
+    % Rysowanie Bobów
+    p_b = [];
+    for k = 1:length(theta_bobs)
+        x_b = dist_b * sind(theta_bobs(k));
+        y_b = dist_b * cosd(theta_bobs(k));
+        p_b = plot(x_b, y_b, 'bo', 'MarkerSize', 8, 'MarkerFaceColor', 'b');
+        
+        % Opis skrajnych Bobów, aby nie zamazywać wykresu
+        if k == 1 || k == length(theta_bobs)
+            text(x_b - 2.5, y_b - 2.5, sprintf('B_{%d}\n(%gm, %g\\circ)', k, dist_b, theta_bobs(k)), ...
+                 'Color', 'b', 'FontSize', 8, 'HorizontalAlignment', 'right');
+        end
+    end
+    if ~isempty(p_b)
+        set(p_b, 'DisplayName', sprintf('Bobs (K=%d)', length(theta_bobs)));
+    end
+    
+    % Rysowanie stacji bazowej
+    p_bs = plot(x_bs, y_bs, 'k^', 'MarkerSize', 12, 'MarkerFaceColor', 'k', 'DisplayName', 'Base Station (BS)');
+    text(x_bs, y_bs - 4, 'BS (0,0)', 'HorizontalAlignment', 'center', 'Color', 'k');
+    
+    % Ustawienia osi
+    axis equal;
+    xlim([-max_d, max_d]);
+    ylim([-10, max_d]);
+    xlabel('X [m]'); ylabel('Y [m]');
+    title('Scenario 7: Pilot Jamming Attack (Denial-of-Service)');
+    legend([p_bs, p_b, p_e], 'Location', 'NorthWest');
+    
+    % Zapis do pliku
+    try
+        save_figure(fig_top, '../topology/topology_pilot_jamming');
+    catch
+        warning('Funkcja save_figure nie jest dostępna.');
+    end
 end
