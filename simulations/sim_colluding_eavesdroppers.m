@@ -136,7 +136,7 @@ legend('6 GHz', '28 GHz', 'Location', 'SouthWest');
 
 sgtitle(sprintf('Colluding eavesdroppers (nrCDL + FSPL, K = %d, SNR_{tx} = %d dB)', K, SNR_tx_dB));
 save_figure(fig, 'fig_colluding_eavesdroppers');
-plot_colluding_topology(dist, K, L)
+plot_colluding_topology(dist, K, max_L);
 
 
 function cdl = setup_matlab_cdl(cdl, Nt, fc, theta)
@@ -209,10 +209,5 @@ function plot_colluding_topology(dist, K, L)
     title(sprintf('Scenario 3: Colluding eavesdroppers (K=%d, L=%d, d=%gm)', K, L, dist));
     legend([p_bs, p_b, p_e], 'Location', 'NorthWest');
     
-    % Zapis do pliku
-    try
-        save_figure(fig_top, '../topology/fig_colluding_eves');
-    catch
-        warning('Funkcja save_figure nie jest dostępna.');
-    end
+    save_topology(fig_top, 'topology_colluding_eves');
 end
