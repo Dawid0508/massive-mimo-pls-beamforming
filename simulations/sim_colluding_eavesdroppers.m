@@ -14,7 +14,7 @@ rng(p.rng_seed);
 dist      = 50;
 L_values  = 1:2:15;
 K         = 4;
-numIter   = 50;          % Zoptymalizowana pętla pozwala na więcej iteracji
+numIter   = 100;          % Zoptymalizowana pętla pozwala na więcej iteracji
 SNR_tx_dB = 100;         % Traktowane jako rho_tx = P_tx / N_0 (Transmit SNR)
 P_tx      = 10^(SNR_tx_dB / 10);
 noise_var = 1;           % Znormalizowany szum tła
@@ -159,7 +159,9 @@ title('Fairness of per-user secrecy');
 legend(legend_6GHz, legend_28GHz, 'Location', 'SouthWest');
 
 % Tytuł główny dla całej figury
-sgtitle(sprintf('Colluding Eavesdroppers Trade-off (K = %d, Distance = %g m)', K, dist));
+% Tytuł główny dla całej figury
+sgtitle('Scenario 3: Colluding Eavesdroppers Trade-off');
+
 
 try save_figure(fig, 'fig_colluding_eavesdroppers'); catch; end
 plot_colluding_topology(dist, K, max_L);
