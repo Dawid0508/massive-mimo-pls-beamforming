@@ -115,7 +115,7 @@ xlabel('Number of users (K)'); ylabel("Jain's index (Fairness)");
 title(sprintf('Fairness vs K (Mean Rx SNR \\approx %.1f dB)', mean(Rx_SNR_K_vec)));
 legend('Matrix (Frobenius)', 'Vector (per-user)', 'Location', 'SouthWest');
 
-sgtitle(sprintf('ZF Normalization Trade-off: 6 GHz CDL-A (Nt = %d, Full Sector Spread)', Nt));
+sgtitle(sprintf('Scenario 2: ZF Normalization Trade-off'));
 save_figure(fig, 'fig_fairness_normalization');
 plot_multi_user_topology(dist_k_sweep, theta_k_sweep, dist_e, theta_e);
 
