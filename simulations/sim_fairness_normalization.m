@@ -1,6 +1,6 @@
 % =========================================================================
 % SCENARIO: Vector vs Matrix ZF normalization - Sum-Rate vs Fairness
-% Oparty na modelu 3GPP nrCDLChannel i fizycznym Path Loss (FSPL)
+% Oparty na modelu 3GPP nrCDLChannel i fizycznym Path Loss (3GPP UMi)
 % ZAWARTY FIX: Dynamiczny i prawidłowy rozkład przestrzenny dla każdego K!
 % =========================================================================
 pls_startup();
@@ -12,21 +12,23 @@ rng(p.rng_seed);
 Nt          = 32;                 
 fc          = p.fc_sub6;          
 K_fixed     = 8;                  
-SNR_fixed   = 80;                 % Dostosowano do fizycznego FSPL (bezwzględnego)
-SNR_tx_vec  = 60:5:120;           % Oś X: Transmit SNR (Moc stacji bazowej w dB)
+SNR_fixed   = 110;                 % Bazowy Transmit SNR do fizycznego path loss
+SNR_tx_vec  = 80:5:140;           % Transmit SNR (Moc stacji bazowej w dB)
 K_vec       = 2:2:16;             
-numIter     = 50;                 
-
+numIter     = 100;                 
 dist_e  = 40;
 theta_e = 30;
 
 % Kanał podsłuchiwacza Ewy (jedna, stała pozycja)
 cdl_e = setup_matlab_cdl(Nt, fc, theta_e, 'CDL-A');
 
-SR_vs_SNR = zeros(2, length(SNR_tx_vec));
-J_vs_SNR  = zeros(2, length(SNR_tx_vec));
-SR_vs_K   = zeros(2, length(K_vec));
-J_vs_K    = zeros(2, length(K_vec));
+SR_vs_SNR  = zeros(2, length(SNR_tx_vec));
+J_vs_SNR   = zeros(2, length(SNR_tx_vec));
+SNR_rx_vec = zeros(1, length(SNR_tx_vec)); % Wektor do zbierania uśrednionego Rx SNR
+
+SR_vs_K    = zeros(2, length(K_vec));
+J_vs_K     = zeros(2, length(K_vec));
+Rx_SNR_K_vec = zeros(1, length(K_vec));    % Średni Rx SNR przy zmianie K
 
 % =========================================================================
 % --- 1. SWEEP TRANSMIT SNR (Dla stałego K = 8) ---
@@ -44,7 +46,7 @@ end
 
 for s_idx = 1:length(SNR_tx_vec)
     P_tx_lin = 10^(SNR_tx_vec(s_idx) / 10);
-    [SR_vs_SNR(:, s_idx), J_vs_SNR(:, s_idx)] = run_cdl_sweep( ...
+    [SR_vs_SNR(:, s_idx), J_vs_SNR(:, s_idx), SNR_rx_vec(s_idx)] = run_cdl_sweep( ...
         cdl_b_snr, cdl_e, dist_snr_sweep, dist_e, fc, Nt, K_fixed, P_tx_lin, numIter);
 end
 
@@ -57,7 +59,7 @@ fprintf('Rozpoczynam sweep K dla Transmit SNR = %d dB...\n', SNR_fixed);
 for k_idx = 1:length(K_vec)
     K_current = K_vec(k_idx);
     
-    % KLUCZOWA POPRAWKA: Dynamiczne skalowanie siatki geometrycznej dla danego K!
+    % Dynamiczne skalowanie siatki geometrycznej dla danego K
     dist_k_sweep  = linspace(20, 150, K_current);
     theta_k_sweep = linspace(-60, 60, K_current);
     
@@ -66,7 +68,7 @@ for k_idx = 1:length(K_vec)
         cdl_b_k{k} = setup_matlab_cdl(Nt, fc, theta_k_sweep(k), 'CDL-A');
     end
     
-    [SR_vs_K(:, k_idx), J_vs_K(:, k_idx)] = run_cdl_sweep( ...
+    [SR_vs_K(:, k_idx), J_vs_K(:, k_idx), Rx_SNR_K_vec(k_idx)] = run_cdl_sweep( ...
         cdl_b_k, cdl_e, dist_k_sweep, dist_e, fc, Nt, K_current, P_tx_fixed_lin, numIter);
 end
 
@@ -75,76 +77,86 @@ end
 % =========================================================================
 fig = figure('Color', 'w', 'Position', [100 100 1200 760]);
 
+% 1. Sum-Rate vs Received SNR
 subplot(2, 2, 1);
-plot(SNR_tx_vec, SR_vs_SNR(1,:), '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
-plot(SNR_tx_vec, SR_vs_SNR(2,:), '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
+plot(SNR_rx_vec, SR_vs_SNR(1,:), '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
+plot(SNR_rx_vec, SR_vs_SNR(2,:), '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
 grid on; box on;
-xlabel('Transmit SNR at Base Station (dB)'); ylabel('Secrecy Sum-Rate (bits/s/Hz)');
-title(sprintf('Sum-Rate vs SNR (K = %d)', K_fixed));
+xlim([min(SNR_rx_vec) max(SNR_rx_vec)]); % <-- DOPASOWANIE OSI DO DANYCH
+xlabel('Average Received SNR at Clients (dB)'); ylabel('Secrecy Sum-Rate (bits/s/Hz)');
+title(sprintf('Sum-Rate vs Received SNR (K = %d)', K_fixed));
 legend('Matrix (Frobenius)', 'Vector (per-user)', 'Location', 'NorthWest');
 
+% 2. Fairness vs Received SNR
 subplot(2, 2, 2);
-plot(SNR_tx_vec, J_vs_SNR(1,:), '--bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
-plot(SNR_tx_vec, J_vs_SNR(2,:), '--rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
+plot(SNR_rx_vec, J_vs_SNR(1,:), '--bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
+plot(SNR_rx_vec, J_vs_SNR(2,:), '--rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
 grid on; box on; ylim([0 1.05]);
-xlabel('Transmit SNR at Base Station (dB)'); ylabel("Jain's index (Fairness)");
-title(sprintf('Fairness vs SNR (K = %d)', K_fixed));
+xlim([min(SNR_rx_vec) max(SNR_rx_vec)]); % <-- DOPASOWANIE OSI DO DANYCH
+xlabel('Average Received SNR at Clients (dB)'); ylabel("Jain's index (Fairness)");
+title(sprintf('Fairness vs Received SNR (K = %d)', K_fixed));
 legend('Matrix (Frobenius)', 'Vector (per-user)', 'Location', 'SouthWest');
 
+% 3. Sum-Rate vs K
 subplot(2, 2, 3);
 plot(K_vec, SR_vs_K(1,:), '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
 plot(K_vec, SR_vs_K(2,:), '-rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
 grid on; box on;
 xlabel('Number of users (K)'); ylabel('Secrecy Sum-Rate (bits/s/Hz)');
-title(sprintf('Sum-Rate vs K (Transmit SNR = %d dB)', SNR_fixed));
+title(sprintf('Sum-Rate vs K (Mean Rx SNR \\approx %.1f dB)', mean(Rx_SNR_K_vec)));
 legend('Matrix (Frobenius)', 'Vector (per-user)', 'Location', 'SouthWest');
 
+% 4. Fairness vs K
 subplot(2, 2, 4);
 plot(K_vec, J_vs_K(1,:), '--bo', 'LineWidth', 2, 'MarkerFaceColor', 'b'); hold on;
 plot(K_vec, J_vs_K(2,:), '--rs', 'LineWidth', 2, 'MarkerFaceColor', 'r');
 grid on; box on; ylim([0 1.05]);
 xlabel('Number of users (K)'); ylabel("Jain's index (Fairness)");
-title(sprintf('Fairness vs K (Transmit SNR = %d dB)', SNR_fixed));
+title(sprintf('Fairness vs K (Mean Rx SNR \\approx %.1f dB)', mean(Rx_SNR_K_vec)));
 legend('Matrix (Frobenius)', 'Vector (per-user)', 'Location', 'SouthWest');
 
 sgtitle(sprintf('ZF Normalization Trade-off: 6 GHz CDL-A (Nt = %d, Full Sector Spread)', Nt));
 save_figure(fig, 'fig_fairness_normalization');
-
 plot_multi_user_topology(dist_k_sweep, theta_k_sweep, dist_e, theta_e);
 
 % =========================================================================
 % FUNKCJA WYKONAWCZA SWEEPÓW
 % =========================================================================
-function [SR_out, J_out] = run_cdl_sweep(cdl_b, cdl_e, dist_b, dist_e, fc, Nt, K, P_tx, numIter)
+function [SR_out, J_out, Rx_SNR_dB_avg] = run_cdl_sweep(cdl_b, cdl_e, dist_b, dist_e, fc, Nt, K, P_tx, numIter)
     SR_acc = zeros(2, 1);
     J_acc  = zeros(2, 1);
     
+    % Wyliczanie tłumienia 3GPP wektorowo poza główną pętlą Monte Carlo (Szybkość!)
+    [PL_lin_b_vec, ~] = compute_nr_pathloss(dist_b, fc);
+    [PL_lin_e, ~]     = compute_nr_pathloss(dist_e, fc);
+    
+    % Wyznaczenie nominalnego uśrednionego Received SNR u klientów (szum tła = 1)
+    % Uwzględnia moc nadawczą P_tx oraz zysk z wieloantenowości Nt (zgodnie z normowaniem kanału)
+    Rx_SNR_dB_avg = 10 * log10(mean(P_tx * Nt ./ PL_lin_b_vec));
+    
     for it = 1:numIter
         H_eff = zeros(Nt, K);
+        iter_seed = randi([0 2^31-1]);
         
         % Kanały użytkowników (Bobowie)
         for k = 1:K
             release(cdl_b{k});
-            cdl_b{k}.Seed = randi([0 2^31-1]);
+            cdl_b{k}.Seed = iter_seed;
             [pg_b, ~] = cdl_b{k}();
             h_b = squeeze(sum(pg_b, 2)); h_b = h_b(:);
             
-            % Wyliczanie fizycznego tłumienia przestrzennego dla każdego Boba
-            [PL_lin_b, ~] = compute_fspl(dist_b(k), fc);
-            
-            % Kanał efektywny z twardą fizyką tłumienia amplitudy sygnału
-            H_eff(:, k) = sqrt((1 / PL_lin_b) * Nt) * (h_b / norm(h_b));
+            % Kanał efektywny z tłumieniem 3GPP NR UMi
+            H_eff(:, k) = sqrt(1 / PL_lin_b_vec(k)) * h_b;
         end
         
         % Kanał podsłuchiwacza (Ewa)
         release(cdl_e);
-        cdl_e.Seed = randi([0 2^31-1]);
+        cdl_e.Seed = iter_seed;
         [pg_e, ~] = cdl_e();
         h_e = squeeze(sum(pg_e, 2)); h_e = h_e(:);
         
-        % Wyliczanie fizycznego tłumienia przestrzennego dla Ewy
-        [PL_lin_e, ~] = compute_fspl(dist_e, fc);
-        h_e_eff = sqrt((1 / PL_lin_e) * Nt) * (h_e / norm(h_e));
+        % Kanał efektywny Ewy z tłumieniem 3GPP NR UMi
+        h_e_eff = sqrt(1 / PL_lin_e) * h_e;
         
         % Obliczanie surowego prekodera pseudoodwrotności (ZF)
         W_raw = H_eff * pinv(H_eff' * H_eff);
@@ -228,13 +240,12 @@ function cdl = setup_matlab_cdl(Nt, fc, theta, band_tag)
 end
 
 % =========================================================================
-% FUNKCJA POMOCNICZA: Generowanie topologii scenariusza (Multi-User) - UPROSZCZONA
+% FUNKCJA POMOCNICZA: Generowanie topologii scenariusza (Multi-User)
 % =========================================================================
 function plot_multi_user_topology(dist_b_vec, theta_b_vec, dist_e, theta_e)
     fig_top = figure('Color', 'w', 'Position', [150 150 700 700]);
     hold on; grid on; box on;
     
-    % Konwersja na kartezjańskie (BS w 0,0, oś Y to broadside 0 st.)
     x_bs = 0; y_bs = 0;
     max_d = max([dist_b_vec, dist_e]) + 20;
     
@@ -252,19 +263,16 @@ function plot_multi_user_topology(dist_b_vec, theta_b_vec, dist_e, theta_e)
         
         p_b = plot(x_b, y_b, 'bo', 'MarkerSize', 8, 'MarkerFaceColor', 'b');
         
-        % Opis co drugiego Boba lub skrajnych, by zbytnio nie zamazać wykresu
         if k == 1 || k == length(dist_b_vec)
             text(x_b + 3, y_b, sprintf('B_{%d}\n(%gm, %g\\circ)', k, dist_b_vec(k), theta_b_vec(k)), 'Color', 'b', 'FontSize', 8);
         end
     end
-    % Ustawiamy nazwę w legendzie tylko dla ostatniego narysowanego Boba
     set(p_b, 'DisplayName', sprintf('Bobs (K=%d)', length(dist_b_vec)));
     
     % Rysowanie stacji bazowej
     p_bs = plot(x_bs, y_bs, 'k^', 'MarkerSize', 12, 'MarkerFaceColor', 'k', 'DisplayName', 'Base Station (BS)');
     text(x_bs, y_bs - 5, 'BS (0,0)', 'HorizontalAlignment', 'center', 'Color', 'k');
     
-    % Ustawienia osi
     axis equal;
     xlim([-max_d, max_d]);
     ylim([-20, max_d]);
@@ -272,7 +280,6 @@ function plot_multi_user_topology(dist_b_vec, theta_b_vec, dist_e, theta_e)
     title(sprintf('Scenario 2: Normalization fairness (K=%d)', length(dist_b_vec)));
     legend([p_bs, p_b, p_e], 'Location', 'NorthWest');
     
-    % Zapis z użyciem Twojej funkcji
     try
         save_figure(fig_top, '../topology/topology_fairness');
     catch

@@ -1,11 +1,16 @@
 % =========================================================================
 % BASELINE: 6 GHz Massive MIMO vs 28 GHz Ultra-Massive MIMO
-% Wykorzystuje: 3GPP TR 38.901 Path Loss (UMi NLOS) oraz nrCDLChannel.
-% Poprawione: Wybór PSLL zamiast HPBW oraz stabilizacja białego tła.
+% -------------------------------------------------------------------------
+% ZAŁOŻENIA MODELU (Do obrony projektu):
+% 1. Kanał: 3GPP TR 38.901 UMi NLOS (nrCDLChannel).
+% 2. Zagrożenie: Active/Untrusted Eavesdropper. Ewa jest prawowitym 
+%    użytkownikiem sieci, stąd BS posiada idealną estymatę jej kanału 
+%    (Perfect CSI) wykorzystywaną w rzutowaniu ortogonalnym ZF.
+% 3. Szum: Znormalizowany do N_0 = 1 (0 dB). 
+% 4. Oś X: Reprezentuje uśredniony odebrany SNR u Boba (Received SNR).
 % =========================================================================
 pls_startup();
 addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
-
 p = default_params();
 rng(p.rng_seed);
 
@@ -13,10 +18,10 @@ rng(p.rng_seed);
 dist_b     = 50;                        % Bob jest na 50 m
 dist_e     = 40;                        % Ewa ukrywa się na 40 m (bliżej stacji!)
 
-% PARAMETR WEJŚCIOWY: Transmit SNR (Moc generowana przez stację bazową)
-SNR_tx_dB  = 60:2:130;                  
-SNR_tx_lin = 10.^(SNR_tx_dB / 10);
-numIter    = 200;
+% PARAMETR WEJŚCIOWY: Znormalizowana Moc Nadawania (P_tx / N_0)
+P_tx_norm_dB  = 70:2:140;                  
+P_tx_norm_lin = 10.^(P_tx_norm_dB / 10);
+numIter       = 50;
 
 bands = struct( ...
     'name', {'6 GHz', '28 GHz'}, ...
@@ -30,22 +35,21 @@ for b = 1:2
     [bands(b).PL_lin_e, bands(b).PL_dB_e] = compute_nr_pathloss(dist_e, bands(b).fc);
     [~, bands(b).sv] = setup_ula(bands(b).Nt, bands(b).fc);
     
-    rx_snr_start = SNR_tx_dB(1) + 10*log10(bands(b).Nt) - bands(b).PL_dB_b;
-    rx_snr_end   = SNR_tx_dB(end) + 10*log10(bands(b).Nt) - bands(b).PL_dB_b;
+    rx_snr_start = P_tx_norm_dB(1) + 10*log10(bands(b).Nt) - bands(b).PL_dB_b;
+    rx_snr_end   = P_tx_norm_dB(end) + 10*log10(bands(b).Nt) - bands(b).PL_dB_b;
     
     fprintf('\n--- Baseline @ %s ---\n', bands(b).name);
-    fprintf('  Transmit SNR sweep: %d:%d:%d dB\n', SNR_tx_dB(1), SNR_tx_dB(2)-SNR_tx_dB(1), SNR_tx_dB(end));
+    fprintf('  Normalized Transmit Power: %d:%d:%d dB\n', P_tx_norm_dB(1), P_tx_norm_dB(2)-P_tx_norm_dB(1), P_tx_norm_dB(end));
     fprintf('  Equivalent Bob Rx SNR: %.1f to %.1f dB\n', rx_snr_start, rx_snr_end);
     fprintf('  Bob (d = %g m, PL = %.2f dB)\n', dist_b, bands(b).PL_dB_b);
     fprintf('  Eve (d = %g m, PL = %.2f dB)\n', dist_e, bands(b).PL_dB_e);
 end
-
 fprintf('\nmmWave path-loss penalty vs 6 GHz (Bob): %.2f dB\n', ...
     bands(2).PL_dB_b - bands(1).PL_dB_b);
 
-SecrecyCap = zeros(2, 2, length(SNR_tx_dB));    % bands x {MRT,ZF} x SNR
+SecrecyCap = zeros(2, 2, length(P_tx_norm_dB)); 
 theta_b = -30; 
-theta_e = -40;
+theta_e = 40;
 
 for f_idx = 1:2
     fc = bands(f_idx).fc;  
@@ -72,6 +76,7 @@ for f_idx = 1:2
         hb = squeeze(sum(pg_b, 2)); hb = hb(:);
         he = squeeze(sum(pg_e, 2)); he = he(:);
         
+        % Kanały efektywne uwzględniające potężny Path Loss UMi NLOS
         hb_eff = sqrt(1/PL_b) * hb;
         he_eff = sqrt(1/PL_e) * he;
         
@@ -85,9 +90,10 @@ for f_idx = 1:2
             w_zf = zeros(Nt, 1);
         end
         
-        for s = 1:length(SNR_tx_lin)
-            P_tx = SNR_tx_lin(s); 
+        for s = 1:length(P_tx_norm_lin)
+            P_tx = P_tx_norm_lin(s); 
             
+            % Obliczenia przepustowości przy N_0 = 1
             R_b = log2(1 + P_tx * abs(hb_eff' * w_mrt)^2);
             R_e = log2(1 + P_tx * abs(he_eff' * w_mrt)^2);
             SecrecyCap(f_idx,1,s) = SecrecyCap(f_idx,1,s) + max(0, R_b - R_e);
@@ -117,12 +123,13 @@ for f_idx = 1:2
     PL_dB_b = bands(f_idx).PL_dB_b;
     bandStr = [bands(f_idx).name, ' (nrCDLChannel)'];
     
-    SNR_rx_dB_plot = SNR_tx_dB + 10*log10(Nt) - PL_dB_b;
+    % Przeliczenie osi X na rzeczywisty Received SNR u Boba
+    SNR_rx_dB_plot = P_tx_norm_dB + 10*log10(Nt) - PL_dB_b;
     
     cdl_b_s = setup_matlab_cdl(Nt, fc, snap_theta_b, cdl_tag);
     cdl_e_s = setup_matlab_cdl(Nt, fc, snap_theta_e, cdl_tag);
-    cdl_b_s.Seed = 101;
-    cdl_e_s.Seed = 101; 
+    cdl_b_s.Seed = 102;
+    cdl_e_s.Seed = 102; 
     
     [pg_b_s, ~] = cdl_b_s();
     [pg_e_s, ~] = cdl_e_s();
@@ -143,6 +150,7 @@ for f_idx = 1:2
     grid on; box on;
     
     title(['Secrecy: ', bandStr], 'Color', 'k');
+    % OŚ X USTAWIENIE: Received SNR at Bob (dB)
     xlabel('Average Receiver SNR at Bob (dB)', 'Color', 'k'); 
     ylabel('bits/s/Hz', 'Color', 'k');
     
@@ -151,7 +159,7 @@ for f_idx = 1:2
     xlim([min(SNR_rx_dB_plot), max(SNR_rx_dB_plot)]);
     set(ax1, 'Color', 'w', 'XColor', 'k', 'YColor', 'k', 'GridColor', 'k', 'GridAlpha', 0.15);
     
-    % --- WYKRES WIĄZKI ABSOLUTNEJ (Antenna Gain i PSLL) ---
+    % --- WYKRES WIĄZKI ABSOLUTNEJ (Antenna Gain, PSLL, HPBW) ---
     pat_mrt_abs = 10*log10(abs(w_mrt_s' * a_sweep).^2);
     pat_zf_abs  = 10*log10(abs(w_zf_s'  * a_sweep).^2);
     
@@ -159,11 +167,27 @@ for f_idx = 1:2
     plot(angles, pat_mrt_abs, 'b',  'LineWidth', 1.7); hold on;
     plot(angles, pat_zf_abs,  'r--','LineWidth', 1.5);
     
-    % --- OBLICZANIE PSLL (ZAMIAST HPBW) ---
+    % Szukanie parametrów głównej wiązki (na przykładzie wiązki MRT)
     [peak_gain, peak_idx] = max(pat_mrt_abs);
-    [pks, locs] = findpeaks(pat_mrt_abs);
     
-    % Strefa wykluczenia wokół głównego piku (+/- 5 stopni)
+    % --- OBLICZANIE HPBW (3dB Beamwidth) ---
+    level_3db = peak_gain - 3.0;
+    
+    % Szukaj w lewo od piku
+    idx_left = find(pat_mrt_abs(1:peak_idx) <= level_3db, 1, 'last');
+    if isempty(idx_left), idx_left = 1; end
+    
+    % Szukaj w prawo od piku
+    idx_right = find(pat_mrt_abs(peak_idx:end) <= level_3db, 1, 'first') + peak_idx - 1;
+    if isempty(idx_right), idx_right = length(angles); end
+    
+    hpbw_deg = angles(idx_right) - angles(idx_left);
+    
+    % Zaznaczenie HPBW na wykresie
+    plot([angles(idx_left), angles(idx_right)], [level_3db, level_3db], 'k|-', 'LineWidth', 1.5, 'MarkerSize', 6);
+    
+    % --- OBLICZANIE PSLL ---
+    [pks, locs] = findpeaks(pat_mrt_abs);
     exclusion_zone_deg = 5; 
     angle_step = angles(2) - angles(1);
     exclusion_samples = round(exclusion_zone_deg / angle_step);
@@ -177,14 +201,12 @@ for f_idx = 1:2
         sidelobe_idx = valid_locs(max_sidelobe_idx_temp);
         psll = peak_gain - sidelobe_gain;
         
-        % Oznaczenie najwyższego listka bocznego żółtym trójkątem
-        plot(angles(sidelobe_idx), sidelobe_gain, 'kv', 'MarkerFaceColor', 'y', 'MarkerSize', 7);
-        % Linia pozioma odniesienia poziomu listka do głównego szczytu
+        plot(angles(sidelobe_idx), sidelobe_gain, 'kv', 'MarkerFaceColor', 'y', 'MarkerSize', 6);
         plot([angles(sidelobe_idx), angles(peak_idx)], [sidelobe_gain, sidelobe_gain], 'k:', 'LineWidth', 1.5);
         
-        txt = sprintf('Max Gain: %.1f dB\nPSLL: %.1f dB', peak_gain, psll);
+        txt = sprintf('Max Gain: %.1f dB\nHPBW (3dB): %.1f\\circ\nPSLL: %.1f dB', peak_gain, hpbw_deg, psll);
     else
-        txt = sprintf('Max Gain: %.1f dB\nPSLL: N/A', peak_gain);
+        txt = sprintf('Max Gain: %.1f dB\nHPBW (3dB): %.1f\\circ\nPSLL: N/A', peak_gain, hpbw_deg);
     end
     
     text(0.96, 0.94, txt, 'Units', 'normalized', ...
@@ -207,34 +229,20 @@ for f_idx = 1:2
 end
 
 sgt = sgtitle(sprintf('6G PLS Baseline (Bob = %gm, Eve = %gm)', dist_b, dist_e));
-set(sgt, 'Color', 'k');
+set(sgt, 'Color', 'k', 'FontWeight', 'bold');
 
-% Bezpieczniki tła przed wywołaniem zapisu pliku
 set(fig, 'InvertHardcopy', 'off');
 set(fig, 'Color', 'w');
-
-save_figure(fig, 'fig_baseline_6GHz_vs_28GHz');
+try
+    save_figure(fig, 'fig_baseline_6GHz_vs_28GHz');
+catch
+    warning('Funkcja save_figure nie jest dostępna. Wykres nie został zapisany automatycznie.');
+end
 plot_topology(dist_b, theta_b, dist_e, theta_e);
 
 % =========================================================================
 % FUNKCJE POMOCNICZE
 % =========================================================================
-function [PL_lin, PL_dB] = compute_nr_pathloss(dist_m, fc_Hz)
-    cfgPL = nrPathLossConfig;
-    cfgPL.Scenario = 'UMi'; 
-    h_bs = 10.0; 
-    h_ut = 1.5;  
-    
-    num_points = length(dist_m);
-    pos_bs = repmat([0; 0; h_bs], 1, num_points); 
-    pos_ue = [dist_m; zeros(1, num_points); repmat(h_ut, 1, num_points)];
-    
-    is_los = false(1, num_points); 
-    
-    PL_dB = nrPathLoss(cfgPL, fc_Hz, is_los, pos_bs, pos_ue);
-    PL_lin = 10.^(PL_dB / 10);
-end
-
 function cdl = setup_matlab_cdl(Nt, fc, theta, band_tag)
     cdl = nrCDLChannel;
     cdl.DelayProfile = 'CDL-A';
@@ -287,5 +295,8 @@ function plot_topology(dist_b, theta_b, dist_e, theta_e)
     
     set(fig_top, 'InvertHardcopy', 'off');
     set(fig_top, 'Color', 'w');
-    save_figure(fig_top, '../topology/topology_baseline');
+    try
+        save_figure(fig_top, '../topology/topology_baseline');
+    catch
+    end
 end
