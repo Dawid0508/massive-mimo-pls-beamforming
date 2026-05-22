@@ -278,7 +278,7 @@ imagesc(JPR_grid_dB, 1:length(Nt_vec), SR_grid);
 set(gca, 'YDir', 'normal', 'YTick', 1:length(Nt_vec), 'YTickLabel', Nt_vec);
 colormap(parula); 
 
-% Pasek kolorów z podpisem
+% Pasek kolorów z wyraźnym podpisem jednostki obok
 cb = colorbar;
 cb.Label.String = 'Secrecy Sum-Rate (bits/s/Hz)';
 cb.Label.FontSize = 10;
@@ -286,22 +286,6 @@ cb.Label.FontWeight = 'bold';
 
 xlabel('Jammer-to-Pilot Ratio (dB)'); ylabel('Antennas (N_t)');
 title('Secrecy Sum-Rate (ZF): N_t vs JPR');
-
-% Dodawanie wartości liczbowych na mapie ciepła
-for i = 1:length(Nt_vec)
-    for j = 1:length(JPR_grid_dB)
-        % Dynamiczny kontrast czcionki
-        if SR_grid(i,j) > max(SR_grid(:)) * 0.7
-            txt_color = 'k'; 
-        else
-            txt_color = 'w'; 
-        end
-        text(JPR_grid_dB(j), i, sprintf('%.1f', SR_grid(i, j)), ...
-            'HorizontalAlignment', 'center', ...
-            'Color', txt_color, 'FontSize', 9, 'FontWeight', 'bold');
-    end
-end
-
 % Bottom-right: Array Gain vs Jamming
 subplot(2, 2, 4);
 plot(Nt_vec, SR_grid(:, end), '-mo', 'LineWidth', 2, 'MarkerFaceColor', 'm'); hold on;
