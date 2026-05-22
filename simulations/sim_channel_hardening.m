@@ -1,6 +1,8 @@
 % =========================================================================
 % SCENARIO: Channel hardening in Massive MIMO and its impact on PLS
-% (Zaktualizowano do oficjalnego modelu nrCDLChannel z 5G Toolbox)
+% -------------------------------------------------------------------------
+% Zaktualizowano: Tłumienie 3GPP (compute_nr_pathloss), wspólny seed (CRN)
+% oraz dynamiczne wyliczanie zysku Rx SNR wynikającego z rosnącego Nt.
 % =========================================================================
 pls_startup();
 addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
@@ -8,31 +10,37 @@ p = default_params();
 rng(p.rng_seed);
 
 % --- Configuration -------------------------------------------------------
-Nt_vec       = [4 8 16 32 64 128 256];   % Zmniejszono max do 256 dla optymalizacji
-Nt_hist      = [4, 256];                 % values shown as histograms
-
-% UWAGA: Zmniejszamy numIter z 4000 na 400. Model nrCDLChannel z 5G Toolbox 
-% jest znacznie cięższy obliczeniowo niż zwykłe randn().
+Nt_vec       = [4 8 16 32 64 128 256];   
+Nt_hist      = [4, 256];                 
 numIter      = 400;                      
-
 fc           = p.fc_sub6;
 dist_b       = 50;                       % Bob na 50 m
 dist_e       = 40;                       % Ewa ukrywa się bliżej (40 m)
-SNR_tx_dB    = 90;                       % Moc stacji bazowej [dB]
+SNR_tx_dB    = 105;                       % Transmit SNR (rho_tx) [dB]
 P_tx         = 10^(SNR_tx_dB / 10);
 noise_var    = 1;
 cdl_tag      = p.cdl_sub6;
 
+% Zmiana z FSPL na model 3GPP
+[PL_lin_b, PL_dB_b] = compute_nr_pathloss(dist_b, fc);
+[PL_lin_e, PL_dB_e] = compute_nr_pathloss(dist_e, fc);
+
+Rx_SNR_base_dB = 10 * log10(P_tx / PL_lin_b);
+
 fprintf('\n--- Channel Hardening (nrCDLChannel) @ %.0f GHz ---\n', fc/1e9);
-fprintf('  Transmit SNR: %d dB\n', SNR_tx_dB);
-fprintf('  Bob (d = %g m), Eve (d = %g m)\n', dist_b, dist_e);
+fprintf('  Transmit SNR (rho_tx): %d dB\n', SNR_tx_dB);
+fprintf('  Bob (d = %g m, 3GPP PL = %.2f dB)\n', dist_b, PL_dB_b);
+fprintf('  Eve (d = %g m, 3GPP PL = %.2f dB)\n', dist_e, PL_dB_e);
 
-[PL_lin_b, PL_dB_b] = compute_fspl(dist_b, fc);
-[PL_lin_e, PL_dB_e] = compute_fspl(dist_e, fc);
+% Prezentacja zysku energetycznego Array Gain
+fprintf('\n  [!] Rx SNR Scaling due to Array Gain (10*log10(Nt)):\n');
+fprintf('      - Dla Nt = %3d: Rx SNR = %5.1f dB\n', Nt_vec(1), 10*log10(P_tx * Nt_vec(1) / PL_lin_b));
+fprintf('      - Dla Nt = %3d: Rx SNR = %5.1f dB\n', Nt_vec(end), 10*log10(P_tx * Nt_vec(end) / PL_lin_b));
+fprintf('-----------------------------------------------------------\n');
 
-var_norm_h   = zeros(size(Nt_vec));      % Var(||h||^2 / Nt)
+var_norm_h   = zeros(size(Nt_vec));      
 mean_norm_h  = zeros(size(Nt_vec));
-std_R_sec    = zeros(size(Nt_vec));      % Std(R_secrecy) under MRT
+std_R_sec    = zeros(size(Nt_vec));      
 mean_R_sec   = zeros(size(Nt_vec));
 hist_data    = cell(length(Nt_hist), 1);
 
@@ -44,29 +52,27 @@ for n_idx = 1:length(Nt_vec)
     g_samples = zeros(numIter, 1);
     R_samples = zeros(numIter, 1);
     
-    % Inicjalizujemy kanały dla danej liczby anten
     cdl_b = setup_matlab_cdl_stat(Nt, fc, -30, cdl_tag);
     cdl_e = setup_matlab_cdl_stat(Nt, fc, 30, cdl_tag);
     
     for it = 1:numIter
-        % Generujemy nowe realizacje kanału
-        release(cdl_b); cdl_b.Seed = randi([0 2^31-1]);
+        % Wspólny seed dla zachowania spójności przestrzennej w iteracji
+        common_seed = randi([0 2^31-1]);
+        
+        release(cdl_b); cdl_b.Seed = common_seed;
         [pg_b, ~] = cdl_b();
         
-        release(cdl_e); cdl_e.Seed = randi([0 2^31-1]);
+        release(cdl_e); cdl_e.Seed = common_seed;
         [pg_e, ~] = cdl_e();
         
-        % Bezpieczne spłaszczanie wyjścia do wektora kolumnowego
         h_raw_b = sum(pg_b, 2); h_raw_b = h_raw_b(:); 
         h_raw_e = sum(pg_e, 2); h_raw_e = h_raw_e(:);
         
-        % --- KLUCZOWA ZMIANA: Brak norm(h_raw) w mianowniku ---
-        % W modelu CDL, moc ścieżek sumuje się nominalnie do 1. 
-        % Aplikujemy tylko fizyczne tłumienie.
+        % Kanał efektywny z tłumieniem
         h_eff_b = sqrt(1/PL_lin_b) * h_raw_b;
         h_eff_e = sqrt(1/PL_lin_e) * h_raw_e;
         
-        % Channel hardening opiera się na analizie surowego wzmocnienia małoskalowego.
+        % Normalised gain do histogramu hardeningu
         g_samples(it) = (h_raw_b' * h_raw_b) / Nt;          
         
         % Prekoder MRT (stacja kieruje wiązkę na Boba)
@@ -90,9 +96,7 @@ for n_idx = 1:length(Nt_vec)
     end
 end
 
-% Theoretical reference: Var = 1/Nt dla czystego kanału i.i.d. Rayleigha
 var_theory = 1 ./ Nt_vec;
-
 plot_hardening_topology(dist_b, -30, dist_e, 30);
 
 % --- Visualisation -------------------------------------------------------
@@ -113,15 +117,12 @@ pls_axis_prefs(gca, 'refLabelV', 'top');
 grid on; box on;
 xlabel('||h||^2 / N_t'); ylabel('PDF');
 title('Distribution of normalised gain (3GPP CDL)');
-legend(arrayfun(@(n) sprintf('N_t = %d', n), Nt_hist, 'UniformOutput', false), ...
-    'Location', 'NorthEast');
+legend(arrayfun(@(n) sprintf('N_t = %d', n), Nt_hist, 'UniformOutput', false), 'Location', 'NorthEast');
 
 % Top-right: Var(||h||^2/Nt) vs Nt with theory line
 subplot(2, 2, 2);
-loglog(Nt_vec, var_norm_h, '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b', ...
-    'DisplayName', 'CDL (Skorelowany)'); hold on;
-loglog(Nt_vec, var_theory, '--', 'Color', c.ref, 'LineWidth', 1.5, ...
-    'DisplayName', 'Idealny i.i.d. (1/N_t)');
+loglog(Nt_vec, var_norm_h, '-bo', 'LineWidth', 2, 'MarkerFaceColor', 'b', 'DisplayName', 'CDL (Skorelowany)'); hold on;
+loglog(Nt_vec, var_theory, '--', 'Color', c.ref, 'LineWidth', 1.5, 'DisplayName', 'Idealny i.i.d. (1/N_t)');
 grid on; box on;
 xlabel('Number of antennas N_t'); ylabel('Var(||h||^2 / N_t)');
 title('Hardening rate: CDL vs Ideal i.i.d.');
@@ -132,7 +133,7 @@ subplot(2, 2, 3);
 semilogx(Nt_vec, mean_R_sec, '-go', 'LineWidth', 2, 'MarkerFaceColor', 'g');
 grid on; box on;
 xlabel('Number of antennas N_t'); ylabel('E[R_{sec}] (bits/s/Hz)');
-title(sprintf('Mean Secrecy Rate (Transmit SNR = %d dB)', SNR_tx_dB));
+title(sprintf('Mean Secrecy Rate'));
 
 % Bottom-right: std of Secrecy Rate vs Nt - operational hardening
 subplot(2, 2, 4);
@@ -141,7 +142,8 @@ grid on; box on;
 xlabel('Number of antennas N_t'); ylabel('Std(R_{sec}) (bits/s/Hz)');
 title('Outage sensitivity collapses with N_t');
 
-sgtitle('Massive MIMO Channel Hardening (nrCDLChannel / P_tx Physics)');
+% Ujednolicony tytuł (Scenariusz 6)
+sgtitle(sprintf('Scenario 6: Massive MIMO Channel Hardening (Base Rx SNR \\approx %.1f dB)', Rx_SNR_base_dB));
 save_figure(fig, 'fig_channel_hardening');
 
 % =========================================================================
@@ -151,14 +153,10 @@ function cdl = setup_matlab_cdl_stat(Nt, fc, theta, band_tag)
     cdl = nrCDLChannel;
     cdl.DelayProfile = 'CDL-A';
     
-    if fc < 10e9  
-        cdl.DelaySpread = 30e-9;  
-    else          
-        cdl.DelaySpread = 10e-9;  
-    end
+    if fc < 10e9, cdl.DelaySpread = 30e-9; else, cdl.DelaySpread = 10e-9; end
     
     cdl.CarrierFrequency = fc;
-    cdl.MaximumDopplerShift = 0; % Kanał statyczny do analizy pojemności
+    cdl.MaximumDopplerShift = 0; 
     
     cdl.TransmitAntennaArray.Size = [1 Nt 1 1 1]; 
     cdl.TransmitAntennaArray.ElementSpacing = [0.5 0.5 1 1]; 
@@ -176,39 +174,27 @@ function plot_hardening_topology(dist_b, theta_b, dist_e, theta_e)
     fig_top = figure('Color', 'w', 'Position', [150 150 700 700]);
     hold on; grid on; box on;
     
-    % Konwersja na współrzędne kartezjańskie (BS w 0,0)
     x_bs = 0; y_bs = 0;
     max_d = max(dist_b, dist_e) + 15;
     
-    % Rysowanie BS
     plot(x_bs, y_bs, 'k^', 'MarkerSize', 12, 'MarkerFaceColor', 'k', 'DisplayName', 'Base Station (BS)');
     text(x_bs, y_bs - 4, 'BS (0,0)', 'HorizontalAlignment', 'center', 'Color', 'k');
     
-    % Rysowanie Ewy
     x_e = dist_e * sind(theta_e);
     y_e = dist_e * cosd(theta_e);
     plot(x_e, y_e, 'rs', 'MarkerSize', 10, 'MarkerFaceColor', 'r', 'DisplayName', 'Eve');
     text(x_e + 2, y_e, sprintf('Eve\n(%gm, %g\\circ)', dist_e, theta_e), 'Color', 'r', 'FontSize', 9);
     
-    % Rysowanie Boba
     x_b = dist_b * sind(theta_b);
     y_b = dist_b * cosd(theta_b);
     plot(x_b, y_b, 'bo', 'MarkerSize', 10, 'MarkerFaceColor', 'b', 'DisplayName', 'Bob');
     text(x_b - 2, y_b - 2, sprintf('Bob\n(%gm, %g\\circ)', dist_b, theta_b), ...
          'Color', 'b', 'FontSize', 9, 'HorizontalAlignment', 'right');
     
-    % Ustawienia osi
-    axis equal;
-    xlim([-max_d, max_d]);
-    ylim([-10, max_d]);
+    axis equal; xlim([-max_d, max_d]); ylim([-10, max_d]);
     xlabel('X [m]'); ylabel('Y [m]');
     title('Scenario 6: Channel Hardening');
     legend('Location', 'NorthWest');
     
-    % Zapis do pliku
-    try
-        save_figure(fig_top, '../topology/topology_channel_hardening');
-    catch
-        warning('Funkcja save_figure nie jest dostępna.');
-    end
+    try save_figure(fig_top, '../topology/topology_channel_hardening'); catch; end
 end
