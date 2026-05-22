@@ -4,6 +4,7 @@
 % Zaktualizowano: Tłumienie trasy compute_nr_pathloss (model 3GPP),
 % oś X dla sweepu mocy oraz tytuł lewego górnego wykresu zmienione na Rx SNR.
 % Dopasowano osie xlim w prawym dolnym wykresie (brak przerw).
+% ZAWARTY FIX: Implementacja Common Random Numbers (CRN) dla stabilności.
 % =========================================================================
 pls_startup();
 addpath(fullfile(fileparts(mfilename('fullpath')), '..', 'utils'));
@@ -57,28 +58,32 @@ a_acc_vec = zeros(1, length(b_vec));
 a_n_vec   = zeros(1, length(b_vec));
 R_sec_snr_acc = zeros(length(b_show), length(SNR_tx_vec));
 
+% [CRN]: Wektor stałych seedów wygenerowany globalnie dla obu sweepów
+seeds = randi([0 2^31-1], numIter, 1);
+
 % =========================================================================
 % --- SWEEP A: Wpływ rozdzielczości DAC (b) przy stałym Transmit SNR
 % =========================================================================
 fprintf('Rozpoczynam Sweep A (Rozdzielczość DAC)...\n');
 P_tx = 10^(SNR_fixed / 10);
-
 for it = 1:numIter
-    common_seed = randi([0 2^31-1]);
+    iter_seed = seeds(it); % Pobranie seeda przypisanego do danej iteracji
     
     H_eff = zeros(Nt, K);
     for k = 1:K
-        release(cdl_b{k}); cdl_b{k}.Seed = common_seed;
+        release(cdl_b{k}); cdl_b{k}.Seed = iter_seed;
         [pg_b, ~] = cdl_b{k}(); hb = squeeze(sum(pg_b, 2)); hb = hb(:);
         H_eff(:, k) = sqrt(1 / PL_lin_b) * hb; 
     end
-    release(cdl_e); cdl_e.Seed = common_seed;
+    release(cdl_e); cdl_e.Seed = iter_seed;
     [pg_e, ~] = cdl_e(); he = squeeze(sum(pg_e, 2)); he = he(:);
     h_eff_e = sqrt(1 / PL_lin_e) * he;
     
     W_raw = H_eff * pinv(H_eff' * H_eff);
     W = W_raw / norm(W_raw, 'fro') * sqrt(P_tx);
     
+    % [CRN]: Wymuszenie seeda przed generowaniem losowych symboli i szumów
+    rng(iter_seed);
     s = (randn(K, numSym) + 1j*randn(K, numSym)) / sqrt(2);
     x = W * s;
     n_th_b = sqrt(noise_var/2) * (randn(K, numSym) + 1j*randn(K, numSym));
@@ -118,7 +123,6 @@ for it = 1:numIter
         R_sec_acc(bi) = R_sec_acc(bi) + sum_R_s;
     end
 end
-
 R_bob = R_bob_acc / numIter;
 R_eve = R_eve_acc / numIter;
 R_sec = R_sec_acc / numIter;
@@ -132,21 +136,23 @@ for s_idx = 1:length(SNR_tx_vec)
     P_tx_s = 10^(SNR_tx_vec(s_idx)/10);
     
     for it = 1:numIter
-        common_seed = randi([0 2^31-1]);
+        iter_seed = seeds(it); % Wykorzystanie identycznego zestawu seedów kanałowych!
         
         H_eff = zeros(Nt, K);
         for k = 1:K
-            release(cdl_b{k}); cdl_b{k}.Seed = common_seed;
+            release(cdl_b{k}); cdl_b{k}.Seed = iter_seed;
             [pg_b, ~] = cdl_b{k}(); hb = squeeze(sum(pg_b, 2)); hb = hb(:);
             H_eff(:, k) = sqrt(1 / PL_lin_b) * hb; 
         end
-        release(cdl_e); cdl_e.Seed = common_seed;
+        release(cdl_e); cdl_e.Seed = iter_seed;
         [pg_e, ~] = cdl_e(); he = squeeze(sum(pg_e, 2)); he = he(:);
         h_eff_e = sqrt(1 / PL_lin_e) * he;
         
         W_raw = H_eff * pinv(H_eff' * H_eff);
         W     = W_raw / norm(W_raw, 'fro') * sqrt(P_tx_s);
         
+        % [CRN]: Wymuszenie identycznego seeda dla symboli i szumów przy stałym 'it'
+        rng(iter_seed);
         s = (randn(K, numSym) + 1j*randn(K, numSym)) / sqrt(2);
         x = W * s;
         n_th_b = sqrt(noise_var/2) * (randn(K, numSym) + 1j*randn(K, numSym));
@@ -184,13 +190,13 @@ fig = figure('Color', 'w', 'Position', [100 100 1200 760]);
 bar_x = 1:length(b_vec);
 bar_labels = arrayfun(@(b) ternary(isinf(b), 'Inf (Ideal)', sprintf('%d bit', b)), b_vec, 'UniformOutput', false);
 
-% Górny Lewy: Pojemność Boba i Ewy vs Rozdzielczość (ZMODYFIKOWANY TYTUŁ)
+% Górny Lewy: Pojemność Boba i Ewy vs Rozdzielczość
 subplot(2, 2, 1);
 bar(bar_x, [R_bob(:) R_eve(:)], 1.0); grid on; box on;
 set(gca, 'XTick', bar_x, 'XTickLabel', bar_labels);
 xlabel('DAC Resolution (Bits per branch)');
 ylabel('Sum-Rate (bits/s/Hz)');
-title(sprintf('Bob vs Eve Capacity')); % <-- ZMIANA NA RX SNR
+title(sprintf('Bob vs Eve Capacity')); 
 legend('Bob (Target)', 'Eve (Eavesdropper)', 'Location', 'NorthWest');
 
 % Górny Prawy: Secrecy Rate vs Rozdzielczość
@@ -215,7 +221,7 @@ xlabel('DAC bits (b)'); ylabel('Bussgang Gain (a)');
 title('Signal Survival Rate (Bussgang Theorem)');
 ylim([0 1.1]);
 
-% Dolny Prawy: Sweep SNR (ZMODYFIKOWANE DOPASOWANIE OSI)
+% Dolny Prawy: Sweep SNR
 subplot(2, 2, 4);
 markers = {'-rs', '-ms', '-go', '-bo'};
 hold on;
@@ -223,7 +229,7 @@ for ii = 1:length(b_show)
     plot(Rx_SNR_sweep_dB, R_sec_snr(ii,:), markers{ii}, 'LineWidth', 2, 'MarkerFaceColor', markers{ii}(2));
 end
 grid on; box on;
-xlim([min(Rx_SNR_sweep_dB) max(Rx_SNR_sweep_dB)]); % <-- ZMIANA (LIKWIDACJA PRZERW PO BOKACH)
+xlim([min(Rx_SNR_sweep_dB) max(Rx_SNR_sweep_dB)]); 
 xlabel('Average Received SNR at Clients (dB)');
 ylabel('Secrecy Sum-Rate (bits/s/Hz)');
 title('Secrecy Capacity vs Received SNR');
@@ -231,7 +237,6 @@ labels = arrayfun(@(b) ternary(isinf(b), 'Ideal DACs (Inf)', sprintf('%d-bit DAC
 legend(labels, 'Location', 'NorthWest');
 
 sgtitle(sprintf('Scenario 5: Hardware Limits (Low-Res DACs) (Rx SNR \\approx %.1f dB)', Rx_SNR_dB_b));
-
 save_figure(fig, 'fig_low_res_dac');
 plot_dac_topology(dist_b, theta_bobs, dist_e, theta_e);
 
@@ -275,28 +280,21 @@ function out = ternary(cond, a, b)
     if cond, out = a; else, out = b; end
 end
 
-% =========================================================================
-% FUNKCJA POMOCNICZA: Generowanie topologii scenariusza (DAC Quantisation)
-% =========================================================================
 function plot_dac_topology(dist_b, theta_bobs, dist_e, theta_e)
     fig_top = figure('Color', 'w', 'Position', [150 150 700 700]);
     hold on; grid on; box on;
     
-    % Konwersja na współrzędne kartezjańskie (BS w 0,0)
     x_bs = 0; y_bs = 0;
     max_d = max(dist_b, dist_e) + 15;
     
-    % Rysowanie BS
     p_bs = plot(x_bs, y_bs, 'k^', 'MarkerSize', 12, 'MarkerFaceColor', 'k', 'DisplayName', 'Base Station (BS)');
     text(x_bs, y_bs - 4, 'BS (0,0)', 'HorizontalAlignment', 'center', 'Color', 'k');
     
-    % Rysowanie Ewy
     x_e = dist_e * sind(theta_e);
     y_e = dist_e * cosd(theta_e);
     p_e = plot(x_e, y_e, 'rs', 'MarkerSize', 10, 'MarkerFaceColor', 'r', 'DisplayName', 'Eve');
     text(x_e + 2, y_e, sprintf('Eve\n(%gm, %g\\circ)', dist_e, theta_e), 'Color', 'r', 'FontSize', 9);
     
-    % Rysowanie Bobów
     p_b = [];
     for k = 1:length(theta_bobs)
         x_b = dist_b * sind(theta_bobs(k));
@@ -310,7 +308,6 @@ function plot_dac_topology(dist_b, theta_bobs, dist_e, theta_e)
         set(p_b, 'DisplayName', sprintf('Bobs (K=%d)', length(theta_bobs)));
     end
     
-    % Ustawienia osi
     axis equal;
     xlim([-max_d, max_d]);
     ylim([-10, max_d]);
@@ -318,7 +315,6 @@ function plot_dac_topology(dist_b, theta_bobs, dist_e, theta_e)
     title(sprintf('Scenario 5: Hardware Limits (K=%d Bobs, 1 Eve)', length(theta_bobs)));
     legend([p_bs, p_b, p_e], 'Location', 'NorthWest');
     
-    % Zapis do pliku
     try
         save_figure(fig_top, '../topology/topology_low_res_dac');
     catch
