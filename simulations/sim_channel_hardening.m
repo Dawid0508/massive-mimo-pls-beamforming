@@ -44,6 +44,8 @@ std_R_sec    = zeros(size(Nt_vec));
 mean_R_sec   = zeros(size(Nt_vec));
 hist_data    = cell(length(Nt_hist), 1);
 
+master_seeds = randi([0 2^31-1], numIter, 1); 
+
 % --- Sweep ---------------------------------------------------------------
 for n_idx = 1:length(Nt_vec)
     Nt = Nt_vec(n_idx);
@@ -56,8 +58,8 @@ for n_idx = 1:length(Nt_vec)
     cdl_e = setup_matlab_cdl_stat(Nt, fc, 30, cdl_tag);
     
     for it = 1:numIter
-        % Wspólny seed dla zachowania spójności przestrzennej w iteracji
-        common_seed = randi([0 2^31-1]);
+        % Używamy stałego ziarna dla iteracji 'it' niezależnie od N_t
+        common_seed = master_seeds(it); 
         
         release(cdl_b); cdl_b.Seed = common_seed;
         [pg_b, ~] = cdl_b();
