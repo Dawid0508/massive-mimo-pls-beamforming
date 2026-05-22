@@ -206,7 +206,7 @@ function plot_colluding_topology(dist, K, L)
     
     axis equal; xlim([-max_d, max_d]); ylim([-10, max_d]);
     xlabel('X [m]'); ylabel('Y [m]');
-    title(sprintf('Scenario: Colluding eavesdroppers (K=%d, L=%d, d=%gm)', K, L, dist));
+    title(sprintf('Scenario 3: Colluding eavesdroppers'));
     legend([p_bs, p_b, p_e], 'Location', 'NorthWest');
     try save_figure(fig_top, '../topology/topology_colluding_eves'); catch; end
 end

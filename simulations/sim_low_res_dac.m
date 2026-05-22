@@ -312,7 +312,7 @@ function plot_dac_topology(dist_b, theta_bobs, dist_e, theta_e)
     xlim([-max_d, max_d]);
     ylim([-10, max_d]);
     xlabel('X [m]'); ylabel('Y [m]');
-    title(sprintf('Scenario 5: Hardware Limits (K=%d Bobs, 1 Eve)', length(theta_bobs)));
+    title(sprintf('Scenario 5: Hardware Limits (Low-Res DACs)'));
     legend([p_bs, p_b, p_e], 'Location', 'NorthWest');
     
     try

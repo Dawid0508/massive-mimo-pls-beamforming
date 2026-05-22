@@ -16,7 +16,7 @@ phi_values  = 0.1:0.1:1.0;
 L_fixed     = 7;                      
 phi_fixed   = 0.7;                    
 K           = 4;                      
-numIter     = 50;                     
+numIter     = 100;                     
 SNR_tx_dB   = 110;                    
 P_tx        = 10^(SNR_tx_dB / 10);
 noise_var   = 1;                      
@@ -290,7 +290,7 @@ function plot_an_topology(dist, K, num_eve)
     
     axis equal; xlim([-max_d, max_d]); ylim([-10, max_d]);
     xlabel('X [m]'); ylabel('Y [m]');
-    title(sprintf('Scenario: Artificial Noise (K=%d, L=%d, d=%gm)', K, num_eve, dist));
+    title(sprintf('Scenario 4: Artificial Noise'));
     legend([p_bs, p_b, p_e], 'Location', 'NorthWest');
     try save_figure(fig_top, '../topology/topology_artificial_noise'); catch; end
 end
