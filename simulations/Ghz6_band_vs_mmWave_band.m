@@ -158,7 +158,7 @@ function cdl = setup_matlab_cdl(Nt, fc, theta, band_tag)
     if fc < 10e9  
         cdl.DelaySpread = 30e-9;  
     else          
-        cdl.DelaySpread = 10e-10; % dostosowane do mmWave  
+        cdl.DelaySpread = 10e-9;
     end
     cdl.CarrierFrequency = fc;
     cdl.MaximumDopplerShift = 0;         
