@@ -165,7 +165,7 @@ set(sgt, 'Color', 'k', 'FontWeight', 'bold');
 set(fig, 'InvertHardcopy', 'off', 'Color', 'w');
 
 try
-    save_figure(fig, 'fig_baseline_6GHz_vs_28GHz_passive');
+    save_figure(fig, 'fig_baseline_6GHz_vs_28GHz');
 catch
 end
 plot_topology(dist_b, theta_b, dist_e, theta_e);
@@ -232,7 +232,7 @@ function plot_topology(dist_b, theta_b_vec, dist_e, theta_e)
     
     set(fig_top, 'InvertHardcopy', 'off', 'Color', 'w');
     try
-        save_figure(fig_top, '../topology/topology_baseline_passive');
+        save_figure(fig_top, '../topology/topology_baseline');
     catch
     end
 end
