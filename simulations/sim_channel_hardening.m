@@ -155,7 +155,7 @@ function cdl = setup_matlab_cdl_stat(Nt, fc, theta, band_tag)
     cdl = nrCDLChannel;
     cdl.DelayProfile = 'CDL-A';
     
-    if fc < 10e9, cdl.DelaySpread = 30e-9; else, cdl.DelaySpread = 10e-9; end
+    if fc < 10e9, cdl.DelaySpread = 92e-9; else, cdl.DelaySpread = 30e-9; end
     
     cdl.CarrierFrequency = fc;
     cdl.MaximumDopplerShift = 0; 

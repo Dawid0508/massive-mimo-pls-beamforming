@@ -166,7 +166,7 @@ plot_colluding_topology(dist, K, max_L);
 function cdl = create_base_cdl(Nt, fc)
     cdl = nrCDLChannel;
     cdl.DelayProfile = 'CDL-A';
-    if fc < 10e9, cdl.DelaySpread = 30e-9; else, cdl.DelaySpread = 10e-9; end
+    if fc < 10e9, cdl.DelaySpread = 92e-9; else, cdl.DelaySpread = 30e-9; end
     cdl.CarrierFrequency = fc;
     cdl.MaximumDopplerShift = 0;
     cdl.TransmitAntennaArray.Size = [1 Nt 1 1 1];

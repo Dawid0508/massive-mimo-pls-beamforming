@@ -233,7 +233,7 @@ end
 function cdl = setup_matlab_cdl(Nt, fc, theta, band_tag)
     cdl = nrCDLChannel;
     cdl.DelayProfile = 'CDL-A';      
-    cdl.DelaySpread = 30e-9; 
+    cdl.DelaySpread = 92e-9; 
     cdl.CarrierFrequency = fc;
     cdl.MaximumDopplerShift = 0;         
     cdl.TransmitAntennaArray.Size = [1 Nt 1 1 1]; 
